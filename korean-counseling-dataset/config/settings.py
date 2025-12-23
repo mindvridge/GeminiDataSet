@@ -35,6 +35,10 @@ class Settings(BaseSettings):
         default=True,
         description="Vertex AI 사용 여부 (True: Vertex AI, False: AI Studio)"
     )
+    google_api_key: str = Field(
+        default="",
+        description="Google AI Studio API 키 (Vertex AI 미사용 시 필요)"
+    )
 
     # ==================== Gemini 모델 설정 ====================
     gemini_pro_model: str = Field(
@@ -205,12 +209,18 @@ def get_settings() -> Settings:
 # 환경 변수 설정 (Vertex AI 사용을 위한)
 def configure_environment() -> None:
     """
-    Vertex AI 사용을 위한 환경 변수 설정
+    Vertex AI 또는 AI Studio 사용을 위한 환경 변수 설정
 
-    google-genai SDK가 Vertex AI를 사용하도록 환경 변수를 설정합니다.
+    google-genai SDK가 올바른 인증 방식을 사용하도록 환경 변수를 설정합니다.
     """
     settings = get_settings()
 
-    os.environ["GOOGLE_CLOUD_PROJECT"] = settings.google_cloud_project
-    os.environ["GOOGLE_CLOUD_LOCATION"] = settings.google_cloud_location
-    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = str(settings.google_genai_use_vertexai).lower()
+    if settings.google_genai_use_vertexai:
+        os.environ["GOOGLE_CLOUD_PROJECT"] = settings.google_cloud_project
+        os.environ["GOOGLE_CLOUD_LOCATION"] = settings.google_cloud_location
+        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
+    else:
+        # AI Studio 모드 - API 키 사용
+        if settings.google_api_key:
+            os.environ["GOOGLE_API_KEY"] = settings.google_api_key
+        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "false"
