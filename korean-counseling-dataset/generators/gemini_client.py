@@ -269,7 +269,7 @@ class GeminiClient:
                     contents.append(
                         types.Content(
                             role=msg.get("role", "user"),
-                            parts=[types.Part.from_text(msg.get("content", ""))]
+                            parts=[types.Part(text=msg.get("content", ""))]
                         )
                     )
 
@@ -277,7 +277,7 @@ class GeminiClient:
             contents.append(
                 types.Content(
                     role="user",
-                    parts=[types.Part.from_text(user_prompt)]
+                    parts=[types.Part(text=user_prompt)]
                 )
             )
 
