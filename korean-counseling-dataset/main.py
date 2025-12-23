@@ -37,9 +37,11 @@ from models.schemas import CounselingCategory, CounselingSession
 from models.prompts import TRACK_A_CATEGORIES, TRACK_B_CATEGORIES
 from generators.crisis_generator import CrisisGenerator
 from generators.general_generator import GeneralGenerator
+from generators.batch_client import BatchClient
 from validators.quality_checker import QualityChecker, EvaluationCriteria
 from pipeline.batch_processor import BatchProcessor, BatchJob
 from pipeline.orchestrator import PipelineOrchestrator, PipelineConfig
+from models.prompts import get_system_prompt, get_scenario_prompt
 
 
 # 로깅 설정
@@ -392,6 +394,164 @@ async def run_validate_mode(
         print(f"\n💾 검증 결과 저장: {output_path}")
 
 
+async def run_batch_api_mode(
+    track: str,
+    category: Optional[str] = None,
+    count: int = 1000,
+    min_turns: int = 5,
+    max_turns: int = 10,
+    output: Optional[str] = None,
+    poll_interval: int = 60,
+) -> None:
+    """
+    Batch API 모드 - 50% 비용 절감
+
+    Standard API 대신 Batch API를 사용하여 대량 데이터 생성
+    """
+    print("\n" + "=" * 60)
+    print("📦 Batch API 모드 (50% 비용 절감)")
+    print("=" * 60)
+
+    # 카테고리 결정
+    if category:
+        categories = [get_category(category)]
+    elif track == "A":
+        categories = TRACK_A_CATEGORIES
+    elif track == "B":
+        categories = TRACK_B_CATEGORIES
+    else:
+        categories = TRACK_A_CATEGORIES + TRACK_B_CATEGORIES
+
+    total_count = len(categories) * count
+
+    print(f"\n📋 설정:")
+    print(f"  - 트랙: {track}")
+    print(f"  - 카테고리: {[c.value for c in categories]}")
+    print(f"  - 카테고리당 생성 수: {count}")
+    print(f"  - 총 예상 생성: {total_count}건")
+
+    # 비용 추정 (Batch 가격)
+    estimated_input_tokens = total_count * 3000
+    estimated_output_tokens = total_count * 6000
+    estimated_cost = (
+        (estimated_input_tokens / 1_000_000) * 1.00 +  # 입력 $1.00/1M
+        (estimated_output_tokens / 1_000_000) * 6.00   # 출력 $6.00/1M
+    )
+    print(f"  - 예상 비용: ${estimated_cost:.2f} (Batch 가격)")
+    print(f"  - 폴링 간격: {poll_interval}초")
+    print(f"\n⚠️  Batch API는 최대 24시간 소요될 수 있습니다.")
+
+    # 확인
+    confirm = input("\n계속 진행하시겠습니까? (y/N): ")
+    if confirm.lower() != 'y':
+        print("취소되었습니다.")
+        return
+
+    # 출력 경로
+    output_path = Path(output) if output else Path("data/batch")
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # BatchClient 초기화
+    actual_track = "A" if track == "A" else "B"
+    client = BatchClient(track=actual_track)
+
+    # 프롬프트 생성
+    print("\n⏳ 프롬프트 생성 중...")
+    prompts = []
+    for cat in categories:
+        track_for_cat = CounselingCategory.get_track(cat)
+        system_prompt = get_system_prompt(track=track_for_cat, include_thinking=True)
+
+        for i in range(count):
+            scenario_prompt = get_scenario_prompt(
+                category=cat,
+                min_turns=min_turns,
+                max_turns=max_turns,
+            )
+            user_prompt = f"""
+다음 시나리오에 맞는 심리상담 세션을 생성해주세요.
+
+{scenario_prompt}
+
+반드시 지정된 JSON 형식으로 출력하세요.
+자연스러운 한국어 구어체를 사용하고, 공감적 화법을 유지하세요.
+"""
+            prompts.append({
+                "system": system_prompt,
+                "user": user_prompt,
+                "category": cat.value,
+            })
+
+    print(f"✅ 프롬프트 생성 완료: {len(prompts)}건")
+
+    # 요청 빌드
+    requests = client.build_requests(prompts)
+
+    # 배치 작업 제출
+    print("\n⏳ 배치 작업 제출 중...")
+    job = await client.create_batch_job(
+        requests=requests,
+        display_name=f"counseling-{track}-{len(prompts)}",
+    )
+    print(f"✅ 배치 작업 제출 완료")
+    print(f"   - 작업 ID: {job.job_id}")
+    print(f"   - 작업 이름: {job.job_name}")
+    print(f"   - 상태: {job.state}")
+
+    # 작업 정보 저장
+    job_info_path = output_path / f"batch_job_{job.job_id}.json"
+    import json
+    with open(job_info_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "job_id": job.job_id,
+            "job_name": job.job_name,
+            "state": job.state,
+            "created_at": job.created_at.isoformat(),
+            "total_requests": job.total_requests,
+            "track": track,
+            "categories": [c.value for c in categories],
+            "count_per_category": count,
+        }, f, ensure_ascii=False, indent=2)
+    print(f"   - 작업 정보 저장: {job_info_path}")
+
+    # 완료 대기
+    print(f"\n⏳ 배치 작업 완료 대기 중... (Ctrl+C로 백그라운드 전환)")
+    print(f"   (작업이 완료되면 자동으로 결과를 저장합니다)")
+
+    def progress_callback(state: str):
+        print(f"   상태: {state}")
+
+    try:
+        result = await client.wait_for_completion(
+            job,
+            poll_interval=poll_interval,
+            progress_callback=progress_callback,
+        )
+
+        # 결과 저장
+        print(f"\n✅ 배치 작업 완료!")
+        print(f"   - 성공: {len(result.responses)}건")
+        print(f"   - 실패: {len(result.errors)}건")
+        print(f"   - 예상 비용: ${result.estimated_cost:.2f}")
+
+        # 응답 저장
+        responses_path = output_path / f"responses_{job.job_id}.jsonl"
+        with open(responses_path, "w", encoding="utf-8") as f:
+            for i, resp in enumerate(result.responses):
+                line = json.dumps({
+                    "index": i,
+                    "category": prompts[i]["category"] if i < len(prompts) else None,
+                    "text": resp.get("text", ""),
+                }, ensure_ascii=False)
+                f.write(line + "\n")
+        print(f"   - 응답 저장: {responses_path}")
+
+    except KeyboardInterrupt:
+        print(f"\n\n⚠️  백그라운드로 전환됨")
+        print(f"   작업 이름: {job.job_name}")
+        print(f"   나중에 상태 확인: python main.py --mode batch-status --job-name {job.job_name}")
+
+
 def print_categories() -> None:
     """사용 가능한 카테고리 출력"""
     print("\n📋 사용 가능한 카테고리:")
@@ -414,8 +574,11 @@ def main():
   # 단일 위기상담 데이터 생성
   python main.py --mode single --track A --category suicide_crisis
 
-  # 일반상담 100건 배치 생성
+  # 일반상담 100건 배치 생성 (Standard API)
   python main.py --mode batch --track B --count 100 --validate
+
+  # Batch API로 대량 생성 (50% 비용 절감)
+  python main.py --mode batch-api --track A --count 1000
 
   # 전체 파이프라인 실행
   python main.py --mode pipeline --track-a-count 50 --track-b-count 200
@@ -429,9 +592,9 @@ def main():
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["single", "batch", "pipeline", "validate", "list-categories"],
+        choices=["single", "batch", "batch-api", "pipeline", "validate", "list-categories"],
         default="single",
-        help="실행 모드 (default: single)",
+        help="실행 모드: single, batch, batch-api(50%%할인), pipeline, validate (default: single)",
     )
 
     # 트랙 선택
@@ -570,6 +733,16 @@ def main():
             min_turns=args.min_turns,
             max_turns=args.max_turns,
             validate=args.validate,
+            output=args.output,
+        ))
+
+    elif args.mode == "batch-api":
+        asyncio.run(run_batch_api_mode(
+            track=args.track,
+            category=args.category,
+            count=args.count,
+            min_turns=args.min_turns,
+            max_turns=args.max_turns,
             output=args.output,
         ))
 
