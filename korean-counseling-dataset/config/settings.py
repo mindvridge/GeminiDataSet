@@ -38,11 +38,11 @@ class Settings(BaseSettings):
 
     # ==================== Gemini 모델 설정 ====================
     gemini_pro_model: str = Field(
-        default="gemini-3.0-pro-preview",
+        default="gemini-3-pro-preview",
         description="Gemini 3 Pro 모델 ID (고위험군 데이터 생성용, Thinking Mode 지원)"
     )
     gemini_flash_model: str = Field(
-        default="gemini-3.0-flash-preview",
+        default="gemini-3-flash-preview",
         description="Gemini 3 Flash 모델 ID (일반상담 데이터 생성용)"
     )
 
