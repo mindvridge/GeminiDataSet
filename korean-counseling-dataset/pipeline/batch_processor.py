@@ -8,6 +8,7 @@ JSONL 형식의 입출력, 비동기 처리, 진행률 추적, 에러 핸들링�
 import asyncio
 import json
 import logging
+import signal
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -134,7 +135,32 @@ class BatchProcessor:
         # 진행률 콜백
         self.progress_callback: Optional[Callable[[int, int, str], None]] = None
 
+        # Graceful shutdown 플래그
+        self._shutdown_requested = False
+        self._setup_signal_handlers()
+
         logger.info("BatchProcessor 초기화 완료")
+
+    def _setup_signal_handlers(self) -> None:
+        """시그널 핸들러 설정 (Ctrl+C 처리)"""
+        def signal_handler(signum, frame):
+            if not self._shutdown_requested:
+                self._shutdown_requested = True
+                print("\n\n⚠️  중지 요청됨 - 현재 카테고리 완료 후 안전하게 종료합니다...")
+                print("   (다시 Ctrl+C를 누르면 즉시 종료)")
+            else:
+                print("\n❌ 강제 종료")
+                raise KeyboardInterrupt
+
+        signal.signal(signal.SIGINT, signal_handler)
+
+    def is_shutdown_requested(self) -> bool:
+        """중지 요청 여부 확인"""
+        return self._shutdown_requested
+
+    def reset_shutdown(self) -> None:
+        """중지 플래그 초기화"""
+        self._shutdown_requested = False
 
     @property
     def crisis_generator(self) -> CrisisGenerator:
@@ -311,6 +337,13 @@ class BatchProcessor:
                 if sessions:
                     self._save_category_sessions(job, category, sessions)
                     logger.info(f"카테고리 저장 완료: {category.value} ({len(sessions)}건)")
+
+                # 중지 요청 확인
+                if self._shutdown_requested:
+                    print(f"\n⏹️  중지됨 - {idx + 1}/{total_categories} 카테고리 완료")
+                    print(f"   저장된 데이터: {result.total_generated}건")
+                    job.status = BatchStatus.COMPLETED
+                    break
 
             # 최종 결과 저장 (메타데이터, 품질 점수)
             if all_sessions:
