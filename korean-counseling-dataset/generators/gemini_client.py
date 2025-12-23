@@ -224,10 +224,10 @@ class GeminiClient:
             if hasattr(response, 'usage_metadata'):
                 usage = response.usage_metadata
                 components.usage_metadata = {
-                    "prompt_tokens": getattr(usage, 'prompt_token_count', 0),
-                    "response_tokens": getattr(usage, 'candidates_token_count', 0),
-                    "total_tokens": getattr(usage, 'total_token_count', 0),
-                    "thoughts_tokens": getattr(usage, 'thoughts_token_count', 0),
+                    "prompt_tokens": getattr(usage, 'prompt_token_count', 0) or 0,
+                    "response_tokens": getattr(usage, 'candidates_token_count', 0) or 0,
+                    "total_tokens": getattr(usage, 'total_token_count', 0) or 0,
+                    "thoughts_tokens": getattr(usage, 'thoughts_token_count', 0) or 0,
                 }
 
         except Exception as e:

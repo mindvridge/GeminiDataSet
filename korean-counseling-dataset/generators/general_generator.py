@@ -289,12 +289,12 @@ class GeneralGenerator:
                     self.stats["by_category"].get(cat_key, 0) + 1
 
                 if response.usage_metadata:
-                    tokens = response.usage_metadata.get("total_tokens", 0)
+                    tokens = response.usage_metadata.get("total_tokens", 0) or 0
                     self.stats["total_tokens"] += tokens
                     self.stats["estimated_cost"] += self.client.estimate_cost(
-                        prompt_tokens=response.usage_metadata.get("prompt_tokens", 0),
-                        response_tokens=response.usage_metadata.get("response_tokens", 0),
-                        thoughts_tokens=response.usage_metadata.get("thoughts_tokens", 0),
+                        prompt_tokens=response.usage_metadata.get("prompt_tokens", 0) or 0,
+                        response_tokens=response.usage_metadata.get("response_tokens", 0) or 0,
+                        thoughts_tokens=response.usage_metadata.get("thoughts_tokens", 0) or 0,
                     )
 
                 logger.info(
