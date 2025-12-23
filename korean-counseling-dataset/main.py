@@ -115,14 +115,10 @@ async def run_single_mode(
             print(f"상담사: {turn.therapist.utterance[:100]}...")
             print()
 
-        # 저장
-        if output:
-            output_path = Path(output)
-            if actual_track == "A":
-                generator.save_session(session, output_path)
-            else:
-                generator.save_session(session, output_path)
-            print(f"\n💾 저장 완료: {output_path}")
+        # 저장 (기본값: data/raw/)
+        output_path = Path(output) if output else Path("data/raw")
+        saved_path = generator.save_session(session, output_path)
+        print(f"\n💾 저장 완료: {saved_path}")
 
         return session
     else:
@@ -272,10 +268,17 @@ async def run_validate_mode(
     sessions = load_sessions_from_jsonl(input_path)
     print(f"  - 로드된 세션: {len(sessions)}건")
 
+    if not sessions:
+        print("\n⚠️  검증할 세션이 없습니다.")
+        print("   먼저 데이터를 생성하세요:")
+        print("   python main.py --mode single --track B --category career")
+        return
+
     # 검증
     checker = QualityChecker()
 
-    print("\n⏳ 품질 검증 중...")
+    evaluated_count = max(1, int(len(sessions) * sample_rate))
+    print(f"\n⏳ 품질 검증 중... ({evaluated_count}건 평가 예정)")
     scores = await checker.evaluate_batch(sessions, sample_rate=sample_rate)
 
     # 결과 출력

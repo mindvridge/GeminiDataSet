@@ -322,12 +322,19 @@ class QualityChecker:
         Returns:
             QualityScore 리스트
         """
+        # 빈 세션 체크
+        if not sessions:
+            logger.warning("평가할 세션이 없습니다.")
+            return []
+
         # 샘플링
         if sample_rate and sample_rate < 1.0:
             import random
+            original_count = len(sessions)
             sample_size = max(1, int(len(sessions) * sample_rate))
+            sample_size = min(sample_size, len(sessions))  # 세션 수보다 크지 않도록
             sessions = random.sample(sessions, sample_size)
-            logger.info(f"샘플링: {sample_size}/{len(sessions)} 세션 평가")
+            logger.info(f"샘플링: {sample_size}/{original_count} 세션 평가")
 
         scores = []
         semaphore = asyncio.Semaphore(self.settings.max_concurrent_requests)
