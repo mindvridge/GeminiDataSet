@@ -23,6 +23,8 @@ import argparse
 import asyncio
 import logging
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +53,71 @@ def setup_logging(level: str = "INFO") -> None:
             logging.StreamHandler(sys.stdout),
         ]
     )
+
+
+class ProgressIndicator:
+    """
+    진행률 표시기 - 스피너, 경과 시간, 현재 상태 표시
+    """
+    SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, message: str = "처리 중"):
+        self.message = message
+        self.running = False
+        self.thread = None
+        self.start_time = None
+        self.step = ""
+        self.lock = threading.Lock()
+
+    def _format_time(self, seconds: float) -> str:
+        """경과 시간 포맷"""
+        if seconds < 60:
+            return f"{seconds:.1f}초"
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}분 {secs:.0f}초"
+
+    def _spin(self):
+        """스피너 애니메이션 실행"""
+        idx = 0
+        while self.running:
+            with self.lock:
+                elapsed = time.time() - self.start_time
+                spinner = self.SPINNER_CHARS[idx % len(self.SPINNER_CHARS)]
+                step_text = f" - {self.step}" if self.step else ""
+                # \r로 같은 줄에 덮어쓰기
+                print(f"\r{spinner} {self.message}{step_text} ({self._format_time(elapsed)})   ", end="", flush=True)
+            idx += 1
+            time.sleep(0.1)
+        # 마지막 줄 정리
+        print("\r" + " " * 80 + "\r", end="", flush=True)
+
+    def set_step(self, step: str):
+        """현재 단계 업데이트"""
+        with self.lock:
+            self.step = step
+
+    def start(self):
+        """진행률 표시 시작"""
+        self.running = True
+        self.start_time = time.time()
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> float:
+        """진행률 표시 중지, 경과 시간 반환"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.5)
+        elapsed = time.time() - self.start_time if self.start_time else 0
+        return elapsed
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop()
 
 
 def get_category(category_name: str) -> CounselingCategory:
@@ -93,16 +160,34 @@ async def run_single_mode(
         generator = GeneralGenerator()
         print("\n✅ 일반상담 데이터 생성")
 
-    print("\n⏳ 세션 생성 중...")
+    # 진행률 표시기 시작
+    progress = ProgressIndicator("세션 생성 중")
+    progress.start()
 
-    session = await generator.generate_session(
-        category=cat,
-        min_turns=min_turns,
-        max_turns=max_turns,
-    )
+    try:
+        # 프롬프트 구성 단계
+        progress.set_step("프롬프트 구성")
+        await asyncio.sleep(0.1)  # UI 업데이트 여유
+
+        # API 호출 단계
+        progress.set_step("Gemini API 호출")
+
+        session = await generator.generate_session(
+            category=cat,
+            min_turns=min_turns,
+            max_turns=max_turns,
+        )
+
+        # 응답 처리 단계
+        if session:
+            progress.set_step("응답 파싱")
+            await asyncio.sleep(0.1)
+
+    finally:
+        elapsed = progress.stop()
 
     if session:
-        print(f"\n✅ 생성 완료!")
+        print(f"\n✅ 생성 완료! (소요 시간: {elapsed:.1f}초)")
         print(f"  - 세션 ID: {session.session_id}")
         print(f"  - 위험 수준: {session.risk_level.value}")
         print(f"  - 대화 턴 수: {len(session.turns)}")
@@ -122,7 +207,7 @@ async def run_single_mode(
 
         return session
     else:
-        print("\n❌ 세션 생성 실패")
+        print(f"\n❌ 세션 생성 실패 (소요 시간: {elapsed:.1f}초)")
         return None
 
 
@@ -264,9 +349,9 @@ async def run_validate_mode(
     print(f"  - 샘플링 비율: {sample_rate * 100:.0f}%")
 
     # 세션 로드
-    print("\n⏳ 세션 로드 중...")
-    sessions = load_sessions_from_jsonl(input_path)
-    print(f"  - 로드된 세션: {len(sessions)}건")
+    with ProgressIndicator("세션 로드 중") as progress:
+        sessions = load_sessions_from_jsonl(input_path)
+    print(f"✅ 로드 완료: {len(sessions)}건")
 
     if not sessions:
         print("\n⚠️  검증할 세션이 없습니다.")
@@ -278,8 +363,15 @@ async def run_validate_mode(
     checker = QualityChecker()
 
     evaluated_count = max(1, int(len(sessions) * sample_rate))
-    print(f"\n⏳ 품질 검증 중... ({evaluated_count}건 평가 예정)")
-    scores = await checker.evaluate_batch(sessions, sample_rate=sample_rate)
+    print(f"\n📊 품질 검증 시작: {evaluated_count}건 평가 예정")
+
+    progress = ProgressIndicator("품질 검증 중")
+    progress.start()
+    try:
+        scores = await checker.evaluate_batch(sessions, sample_rate=sample_rate)
+    finally:
+        elapsed = progress.stop()
+    print(f"✅ 검증 완료 (소요 시간: {elapsed:.1f}초)")
 
     # 결과 출력
     checker.print_summary(scores)
