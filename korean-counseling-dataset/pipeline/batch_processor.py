@@ -307,7 +307,12 @@ class BatchProcessor:
                     result.total_validated += passed
                     result.total_rejected += len(scores) - passed
 
-            # 결과 저장
+                # 카테고리별 즉시 저장 (데이터 손실 방지)
+                if sessions:
+                    self._save_category_sessions(job, category, sessions)
+                    logger.info(f"카테고리 저장 완료: {category.value} ({len(sessions)}건)")
+
+            # 최종 결과 저장 (메타데이터, 품질 점수)
             if all_sessions:
                 self._save_results(job, all_sessions, all_scores, result)
 
@@ -352,6 +357,25 @@ class BatchProcessor:
 
         return result
 
+    def _save_category_sessions(
+        self,
+        job: BatchJob,
+        category: CounselingCategory,
+        sessions: list[CounselingSession],
+    ) -> Path:
+        """카테고리별 세션 즉시 저장 (데이터 손실 방지)"""
+        output_dir = self.output_dir / job.job_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 카테고리별 파일로 저장
+        category_path = output_dir / f"{category.value}.jsonl"
+        with open(category_path, "w", encoding="utf-8") as f:
+            for session in sessions:
+                line = json.dumps(session.model_dump(mode="json"), ensure_ascii=False)
+                f.write(line + "\n")
+
+        return category_path
+
     def _save_results(
         self,
         job: BatchJob,
@@ -359,7 +383,7 @@ class BatchProcessor:
         scores: list[QualityScore],
         result: BatchResult,
     ) -> None:
-        """결과 저장"""
+        """최종 결과 저장 (메타데이터, 통합 파일)"""
         output_dir = self.output_dir / job.job_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
