@@ -242,8 +242,10 @@ async def run_batch_mode(
     print(f"  - 총 예상 생성: {len(categories) * count}건")
     print(f"  - 품질 검증: {'예' if validate else '아니오'}")
 
-    # 배치 처리기 생성
-    processor = BatchProcessor()
+    # 배치 처리기 생성 (출력 경로 설정)
+    output_path = Path(output) if output else Path("data/raw")
+    print(f"  - 출력 경로: {output_path.absolute()}")
+    processor = BatchProcessor(output_dir=output_path)
 
     # 작업 생성
     job = processor.create_job(
