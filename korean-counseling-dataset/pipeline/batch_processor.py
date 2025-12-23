@@ -512,13 +512,47 @@ class BatchProcessor:
 # ==================== JSONL 유틸리티 ====================
 
 def load_sessions_from_jsonl(path: Path) -> list[CounselingSession]:
-    """JSONL 파일에서 세션 로드"""
+    """JSONL 또는 JSON 파일에서 세션 로드 (디렉토리도 지원)"""
     sessions = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                data = json.loads(line)
+    path = Path(path)
+
+    # 디렉토리인 경우 모든 JSON/JSONL 파일 로드
+    if path.is_dir():
+        files = list(path.glob("*.json")) + list(path.glob("*.jsonl"))
+        for file_path in files:
+            sessions.extend(_load_single_file(file_path))
+        return sessions
+
+    # 단일 파일인 경우
+    return _load_single_file(path)
+
+
+def _load_single_file(path: Path) -> list[CounselingSession]:
+    """단일 파일에서 세션 로드"""
+    sessions = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+
+            # JSONL 형식 (여러 줄)
+            if "\n" in content and not content.startswith("["):
+                for line in content.split("\n"):
+                    if line.strip():
+                        data = json.loads(line)
+                        sessions.append(CounselingSession(**data))
+            # JSON 배열 형식
+            elif content.startswith("["):
+                data_list = json.loads(content)
+                for data in data_list:
+                    sessions.append(CounselingSession(**data))
+            # 단일 JSON 객체
+            else:
+                data = json.loads(content)
                 sessions.append(CounselingSession(**data))
+
+    except Exception as e:
+        logger.error(f"파일 로드 오류 ({path}): {e}")
+
     return sessions
 
 
