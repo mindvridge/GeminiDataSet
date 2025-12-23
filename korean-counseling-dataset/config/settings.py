@@ -28,8 +28,8 @@ class Settings(BaseSettings):
         description="Google Cloud 프로젝트 ID"
     )
     google_cloud_location: str = Field(
-        default="us-central1",
-        description="Vertex AI 리전 (Gemini 3 Preview가 배포된 리전)"
+        default="global",
+        description="Vertex AI 리전 (Gemini 3 모델은 global 엔드포인트 필수)"
     )
     google_genai_use_vertexai: bool = Field(
         default=True,
