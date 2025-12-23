@@ -247,6 +247,13 @@ async def run_batch_mode(
     print(f"  - 출력 경로: {output_path.absolute()}")
     processor = BatchProcessor(output_dir=output_path)
 
+    # 예산 한도 표시
+    settings = get_settings()
+    if settings.max_budget_usd > 0:
+        print(f"  - 예산 한도: ${settings.max_budget_usd:.2f}")
+    else:
+        print(f"  - 예산 한도: 무제한")
+
     # 작업 생성
     job = processor.create_job(
         name=f"배치 생성 - {track}",
@@ -508,6 +515,14 @@ def main():
         help="출력 경로",
     )
 
+    # 예산 한도
+    parser.add_argument(
+        "--max-budget",
+        type=float,
+        default=0.0,
+        help="최대 예산 한도 USD (default: 0=무제한)",
+    )
+
     # 로깅
     parser.add_argument(
         "--log-level",
@@ -524,6 +539,11 @@ def main():
 
     # 환경 변수 설정
     configure_environment()
+
+    # 예산 한도 설정 (명령줄 옵션 우선)
+    if args.max_budget > 0:
+        settings = get_settings()
+        settings.max_budget_usd = args.max_budget
 
     # 모드별 실행
     if args.mode == "list-categories":

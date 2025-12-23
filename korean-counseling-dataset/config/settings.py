@@ -93,6 +93,10 @@ class Settings(BaseSettings):
         default=120,
         description="API 요청 타임아웃 (초)"
     )
+    max_budget_usd: float = Field(
+        default=0.0,
+        description="최대 예산 한도 (USD, 0=무제한)"
+    )
 
     # ==================== 데이터 경로 설정 ====================
     data_base_dir: Path = Field(

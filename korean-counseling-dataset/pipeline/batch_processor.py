@@ -162,6 +162,29 @@ class BatchProcessor:
         """중지 플래그 초기화"""
         self._shutdown_requested = False
 
+    def get_current_cost(self) -> float:
+        """현재까지 사용된 예상 비용 (USD)"""
+        cost = 0.0
+        if self._crisis_generator:
+            cost += self._crisis_generator.stats.get("estimated_cost", 0.0)
+        if self._general_generator:
+            cost += self._general_generator.stats.get("estimated_cost", 0.0)
+        return cost
+
+    def is_budget_exceeded(self) -> bool:
+        """예산 한도 초과 여부 확인"""
+        max_budget = self.settings.max_budget_usd
+        if max_budget <= 0:
+            return False  # 무제한
+        return self.get_current_cost() >= max_budget
+
+    def get_remaining_budget(self) -> float:
+        """남은 예산 (USD, 무제한이면 -1)"""
+        max_budget = self.settings.max_budget_usd
+        if max_budget <= 0:
+            return -1  # 무제한
+        return max(0, max_budget - self.get_current_cost())
+
     @property
     def crisis_generator(self) -> CrisisGenerator:
         """위기 상담 생성기 (지연 로딩)"""
@@ -341,6 +364,16 @@ class BatchProcessor:
                 # 중지 요청 확인
                 if self._shutdown_requested:
                     print(f"\n⏹️  중지됨 - {idx + 1}/{total_categories} 카테고리 완료")
+                    print(f"   저장된 데이터: {result.total_generated}건")
+                    job.status = BatchStatus.COMPLETED
+                    break
+
+                # 예산 한도 확인
+                if self.is_budget_exceeded():
+                    current_cost = self.get_current_cost()
+                    max_budget = self.settings.max_budget_usd
+                    print(f"\n💰 예산 한도 도달 - ${current_cost:.2f} / ${max_budget:.2f}")
+                    print(f"   완료된 카테고리: {idx + 1}/{total_categories}")
                     print(f"   저장된 데이터: {result.total_generated}건")
                     job.status = BatchStatus.COMPLETED
                     break
