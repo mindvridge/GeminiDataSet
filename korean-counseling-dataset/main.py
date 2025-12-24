@@ -422,6 +422,7 @@ async def run_batch_api_mode(
     max_turns: int = 10,
     output: Optional[str] = None,
     poll_interval: int = 60,
+    resume: Optional[str] = None,
 ) -> None:
     """
     Batch API 모드 - 50% 비용 절감
@@ -429,7 +430,10 @@ async def run_batch_api_mode(
     Standard API 대신 Batch API를 사용하여 대량 데이터 생성
     """
     print("\n" + "=" * 60)
-    print("📦 Batch API 모드 (50% 비용 절감)")
+    if resume:
+        print("📦 Batch API 모드 (50% 비용 절감) - 이어서 시작")
+    else:
+        print("📦 Batch API 모드 (50% 비용 절감)")
     print("=" * 60)
 
     # 카테고리 결정
@@ -441,6 +445,34 @@ async def run_batch_api_mode(
         categories = TRACK_B_CATEGORIES
     else:
         categories = TRACK_A_CATEGORIES + TRACK_B_CATEGORIES
+
+    # 출력 경로 (이어서 시작 확인을 위해 먼저 설정)
+    output_path = Path(output) if output else Path("data/batch")
+
+    # 이어서 시작: 완료된 카테고리 확인
+    completed_categories = []
+    if resume:
+        resume_dir = output_path / resume
+        if resume_dir.exists():
+            for file_path in resume_dir.glob("*.jsonl"):
+                if file_path.stem not in ["sessions", "responses"]:
+                    completed_categories.append(file_path.stem)
+
+            if completed_categories:
+                print(f"\n📋 이전 작업 발견 (작업 ID: {resume}):")
+                print(f"   완료된 카테고리: {completed_categories}")
+
+                # 완료된 카테고리 제외
+                categories = [c for c in categories if c.value not in completed_categories]
+
+                if not categories:
+                    print(f"\n✅ 모든 카테고리가 이미 완료되었습니다!")
+                    return
+
+                print(f"   남은 카테고리: {[c.value for c in categories]}")
+        else:
+            print(f"\n⚠️  작업 ID '{resume}'를 찾을 수 없습니다. 새로 시작합니다.")
+            resume = None
 
     total_count = len(categories) * count
 
@@ -467,8 +499,7 @@ async def run_batch_api_mode(
         print("취소되었습니다.")
         return
 
-    # 출력 경로
-    output_path = Path(output) if output else Path("data/batch")
+    # 출력 경로 생성
     output_path.mkdir(parents=True, exist_ok=True)
 
     # BatchClient 초기화
@@ -772,6 +803,7 @@ def main():
             min_turns=args.min_turns,
             max_turns=args.max_turns,
             output=args.output,
+            resume=args.resume,
         ))
 
     elif args.mode == "pipeline":
