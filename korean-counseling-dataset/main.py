@@ -444,6 +444,7 @@ async def run_batch_api_mode(
     poll_interval: int = 60,
     resume: Optional[str] = None,
     distribution: Optional[str] = None,
+    turn_type: Optional[str] = None,
 ) -> None:
     """
     Batch API 모드 - 50% 비용 절감, 카테고리별 분리 실행
@@ -487,7 +488,12 @@ async def run_batch_api_mode(
     # 분포 설정
     if distribution:
         dist_config = TURN_DISTRIBUTIONS[distribution]
-        print(f"\n📊 턴 분포: {distribution}")
+        # 특정 턴 타입만 필터링
+        if turn_type:
+            dist_config = [d for d in dist_config if d['name'] == turn_type]
+            print(f"\n📊 턴 분포: {distribution} (필터: {turn_type})")
+        else:
+            print(f"\n📊 턴 분포: {distribution}")
         for d in dist_config:
             print(f"   - {d['name']}: {d['min']}~{d['max']}턴 ({int(d['ratio']*100)}%)")
     else:
@@ -517,7 +523,11 @@ async def run_batch_api_mode(
             for d in dist_config:
                 task_id = f"{cat.value}/{d['name']}"
                 if task_id not in completed_tasks:
-                    task_count = max(1, int(count * d['ratio']))
+                    # 특정 턴 타입만 지정 시 비율 무시하고 count 사용
+                    if turn_type:
+                        task_count = count
+                    else:
+                        task_count = max(1, int(count * d['ratio']))
                     tasks.append({
                         "category": cat,
                         "turn_type": d['name'],
@@ -723,7 +733,9 @@ async def run_batch_api_mode(
         print(f"\n⚠️  남은 작업: {len(remaining_tasks)}개")
         print(f"이어서 시작하려면:")
         dist_opt = f" --distribution {distribution}" if distribution else ""
-        print(f"  python main.py --mode batch-api --track {track} --count {count}{dist_opt} --output {output_path} --resume {job_id}")
+        turn_opt = f" --turn-type {turn_type}" if turn_type else ""
+        cat_opt = f" --category {category}" if category else ""
+        print(f"  python main.py --mode batch-api --track {track} --count {count}{dist_opt}{turn_opt}{cat_opt} --output {output_path} --resume {job_id}")
 
 
 def print_categories() -> None:
@@ -833,6 +845,14 @@ def main():
         help="턴 분포: balanced(20/60/20), short-focus(60/30/10), long-focus(10/30/60)",
     )
 
+    # 특정 턴 타입만 실행
+    parser.add_argument(
+        "--turn-type",
+        type=str,
+        choices=["short", "medium", "long"],
+        help="특정 턴 타입만 실행 (--distribution과 함께 사용)",
+    )
+
     # 검증
     parser.add_argument(
         "--validate",
@@ -936,6 +956,7 @@ def main():
             output=args.output,
             resume=args.resume,
             distribution=args.distribution,
+            turn_type=args.turn_type,
         ))
 
     elif args.mode == "pipeline":
