@@ -52,8 +52,8 @@ class Settings(BaseSettings):
 
     # ==================== 생성 설정 ====================
     max_output_tokens: int = Field(
-        default=8192,
-        description="최대 출력 토큰 수"
+        default=16384,
+        description="최대 출력 토큰 수 (긴 세션용 증가)"
     )
     temperature_pro: float = Field(
         default=0.7,
