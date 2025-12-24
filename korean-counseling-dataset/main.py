@@ -560,13 +560,28 @@ async def run_batch_api_mode(
     print(f"  - 남은 작업: {len(tasks)}개")
     print(f"  - 총 예상 생성: {total_count}건")
 
-    # 비용 추정 (Batch 가격)
-    estimated_input_tokens = total_count * 3000
-    estimated_output_tokens = total_count * 6000
+    # 비용 추정 (Batch 가격) - 턴 수 기반 계산
+    # 토큰 추정 상수
+    TOKENS_INPUT_BASE = 700      # 시스템 프롬프트 + 사용자 프롬프트 (고정)
+    TOKENS_PER_TURN = 300        # 턴당 출력 토큰 (내담자 + 상담사 발화 + 사고과정)
+
+    estimated_input_tokens = 0
+    estimated_output_tokens = 0
+
+    for task in tasks:
+        avg_turns = (task['min_turns'] + task['max_turns']) / 2
+        task_input = task['count'] * TOKENS_INPUT_BASE
+        task_output = task['count'] * avg_turns * TOKENS_PER_TURN
+        estimated_input_tokens += task_input
+        estimated_output_tokens += task_output
+
     estimated_cost = (
         (estimated_input_tokens / 1_000_000) * 1.00 +  # 입력 $1.00/1M
         (estimated_output_tokens / 1_000_000) * 6.00   # 출력 $6.00/1M
     )
+
+    print(f"  - 예상 입력 토큰: {estimated_input_tokens:,}")
+    print(f"  - 예상 출력 토큰: {estimated_output_tokens:,}")
     print(f"  - 예상 비용: ${estimated_cost:.2f} (Batch 가격)")
     print(f"  - 폴링 간격: {poll_interval}초")
     print(f"\n⚠️  Batch API는 작업당 최대 24시간 소요될 수 있습니다.")

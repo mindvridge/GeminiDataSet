@@ -381,10 +381,15 @@ class BatchClient:
                         })
                         self.stats["total_errors"] += 1
 
-            # 비용 추정 (배치 가격)
+            # 비용 추정 (배치 가격) - 실제 출력 기반
             # 입력: $1.00/1M, 출력: $6.00/1M
-            estimated_input_tokens = len(result.responses) * 3000  # 평균 입력 토큰
-            estimated_output_tokens = len(result.responses) * 4000  # 평균 출력 토큰
+            estimated_input_tokens = len(result.responses) * 700  # 시스템 + 사용자 프롬프트
+            # 실제 출력 토큰 계산 (응답 텍스트 길이 기반, 한글 1자 ≈ 1.5 토큰)
+            estimated_output_tokens = 0
+            for resp in result.responses:
+                text = resp.get("text", "")
+                # 한글 기준 토큰 추정 (대략 글자수 * 1.5)
+                estimated_output_tokens += int(len(text) * 1.5)
 
             result.total_tokens = estimated_input_tokens + estimated_output_tokens
             result.estimated_cost = (
