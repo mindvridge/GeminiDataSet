@@ -166,6 +166,22 @@ class ClientUtterance(BaseModel):
         description="감정 강도 (1: 매우 약함 ~ 10: 매우 강함)"
     )
 
+    @field_validator("intensity", mode="before")
+    @classmethod
+    def clamp_intensity(cls, v):
+        """intensity 값을 1-10 범위로 보정"""
+        if v is None:
+            return 5  # 기본값
+        try:
+            val = int(v)
+            if val < 1:
+                return 1
+            if val > 10:
+                return 10
+            return val
+        except (ValueError, TypeError):
+            return 5  # 변환 실패 시 기본값
+
     class Config:
         json_schema_extra = {
             "example": {
