@@ -48,8 +48,8 @@ htmlcov/
 # MyPy
 .mypy_cache/
 
-# 데이터 (대용량)
-data/raw/
+# 데이터 (대용량) - raw는 추적 허용
+# data/raw/  # 생성된 데이터 추적
 data/validated/
 data/final/*.jsonl
 data/final/*.json
