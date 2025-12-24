@@ -134,7 +134,11 @@ class BatchClient:
             "estimated_cost": 0.0,
         }
 
-        logger.info(f"BatchClient 초기화 완료: 모델={self.model_id}, 트랙={track}")
+        # 안전 설정 로그
+        if track == "A":
+            logger.info(f"BatchClient 초기화 완료: 모델={self.model_id}, 트랙={track}, 안전설정=BLOCK_NONE")
+        else:
+            logger.info(f"BatchClient 초기화 완료: 모델={self.model_id}, 트랙={track}, 안전설정=기본")
 
     def _initialize_client(self) -> None:
         """Gemini 클라이언트 초기화"""
@@ -158,6 +162,24 @@ class BatchClient:
             logger.error(f"Batch 클라이언트 초기화 실패: {e}")
             self._client = None
 
+    def _get_safety_settings(self) -> list[dict]:
+        """트랙에 따른 안전 설정 반환"""
+        if self.track == "A":
+            # 고위험군: BLOCK_NONE 설정
+            safety_config = get_crisis_safety_settings()
+        else:
+            # 일반상담: 기본 설정
+            safety_config = get_general_safety_settings()
+
+        # Batch API 형식으로 변환
+        safety_settings = []
+        for setting in safety_config:
+            safety_settings.append({
+                'category': setting.category.name if hasattr(setting.category, 'name') else str(setting.category),
+                'threshold': setting.threshold.name if hasattr(setting.threshold, 'name') else str(setting.threshold),
+            })
+        return safety_settings
+
     def _build_request(
         self,
         system_prompt: str,
@@ -180,7 +202,8 @@ class BatchClient:
                 'topP': self.settings.top_p,
                 'topK': self.settings.top_k,
                 'maxOutputTokens': self.settings.max_output_tokens,
-            }
+            },
+            'safetySettings': self._get_safety_settings(),
         }
 
     def build_requests(
