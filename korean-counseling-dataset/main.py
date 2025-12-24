@@ -296,50 +296,66 @@ async def run_batch_mode(
     else:
         dist_config = None
 
-    # 이어서 시작: 완료된 작업 확인
-    completed_tasks = set()
+    # 이어서 시작: 완료된 작업 및 기존 세션 수 확인
+    existing_counts = {}  # task_id -> existing session count
     if job_dir.exists():
         # 분포 모드: 카테고리/턴타입.jsonl 구조
         for cat_dir in job_dir.iterdir():
             if cat_dir.is_dir():
                 for file_path in cat_dir.glob("*.jsonl"):
-                    completed_tasks.add(f"{cat_dir.name}/{file_path.stem}")
+                    task_id = f"{cat_dir.name}/{file_path.stem}"
+                    # 파일 내 세션 수 계산
+                    line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
+                    existing_counts[task_id] = line_count
         # 일반 모드: 카테고리.jsonl 구조
         for file_path in job_dir.glob("*.jsonl"):
             if file_path.stem not in ["sessions", "responses"]:
-                completed_tasks.add(file_path.stem)
+                line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
+                existing_counts[file_path.stem] = line_count
 
-        if completed_tasks:
+        if existing_counts:
             print(f"\n📋 이전 작업 발견 (작업 ID: {job_id}):")
-            print(f"   완료된 작업: {len(completed_tasks)}개")
+            for task_id, cnt in existing_counts.items():
+                print(f"   - {task_id}: {cnt}건")
 
-    # 작업 목록 생성
+    # 작업 목록 생성 (부족한 수량만 생성)
     tasks = []
     for cat in categories:
         if distribution:
             for d in dist_config:
                 task_id = f"{cat.value}/{d['name']}"
-                if task_id not in completed_tasks:
-                    if turn_type:
-                        task_count = count
-                    else:
-                        task_count = max(1, int(count * d['ratio']))
+                if turn_type:
+                    target_count = count
+                else:
+                    target_count = max(1, int(count * d['ratio']))
+
+                existing = existing_counts.get(task_id, 0)
+                remaining = target_count - existing
+
+                if remaining > 0:
                     tasks.append({
                         "category": cat,
                         "turn_type": d['name'],
                         "min_turns": d['min'],
                         "max_turns": d['max'],
-                        "count": task_count,
+                        "count": remaining,
+                        "target_count": target_count,
+                        "existing_count": existing,
                         "task_id": task_id,
                     })
         else:
-            if cat.value not in completed_tasks:
+            existing = existing_counts.get(cat.value, 0)
+            remaining = count - existing
+
+            if remaining > 0:
                 tasks.append({
                     "category": cat,
                     "turn_type": None,
                     "min_turns": min_turns,
                     "max_turns": max_turns,
-                    "count": count,
+                    "count": remaining,
+                    "target_count": count,
+                    "existing_count": existing,
                     "task_id": cat.value,
                 })
 
@@ -434,14 +450,23 @@ async def run_batch_mode(
         cat = task['category']
         t_type = task['turn_type']
         task_count = task['count']
+        existing_count = task.get('existing_count', 0)
+        target_count = task.get('target_count', task_count)
 
         print(f"\n{'=' * 60}")
         if t_type:
             print(f"📂 작업 [{task_idx + 1}/{len(tasks)}]: {cat.value}/{t_type}")
-            print(f"   {CounselingCategory.get_korean_name(cat)} - {task['min_turns']}~{task['max_turns']}턴, {task_count}건")
+            if existing_count > 0:
+                print(f"   {CounselingCategory.get_korean_name(cat)} - {task['min_turns']}~{task['max_turns']}턴")
+                print(f"   기존: {existing_count}건 → 추가 생성: {task_count}건 (목표: {target_count}건)")
+            else:
+                print(f"   {CounselingCategory.get_korean_name(cat)} - {task['min_turns']}~{task['max_turns']}턴, {task_count}건")
         else:
             print(f"📂 작업 [{task_idx + 1}/{len(tasks)}]: {cat.value}")
-            print(f"   ({CounselingCategory.get_korean_name(cat)}) - {task_count}건")
+            if existing_count > 0:
+                print(f"   기존: {existing_count}건 → 추가 생성: {task_count}건 (목표: {target_count}건)")
+            else:
+                print(f"   ({CounselingCategory.get_korean_name(cat)}) - {task_count}건")
         print("=" * 60)
 
         # 생성기 선택
@@ -697,51 +722,65 @@ async def run_batch_api_mode(
     else:
         dist_config = None
 
-    # 이어서 시작: 완료된 작업 확인
-    completed_tasks = set()
+    # 이어서 시작: 완료된 작업 및 기존 세션 수 확인
+    existing_counts = {}  # task_id -> existing session count
     if job_dir.exists():
         # 분포 모드: 카테고리/턴타입.jsonl 구조
         for cat_dir in job_dir.iterdir():
             if cat_dir.is_dir():
                 for file_path in cat_dir.glob("*.jsonl"):
-                    completed_tasks.add(f"{cat_dir.name}/{file_path.stem}")
+                    task_id = f"{cat_dir.name}/{file_path.stem}"
+                    line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
+                    existing_counts[task_id] = line_count
         # 일반 모드: 카테고리.jsonl 구조
         for file_path in job_dir.glob("*.jsonl"):
             if file_path.stem not in ["sessions", "responses"]:
-                completed_tasks.add(file_path.stem)
+                line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
+                existing_counts[file_path.stem] = line_count
 
-        if completed_tasks:
+        if existing_counts:
             print(f"\n📋 이전 작업 발견 (작업 ID: {job_id}):")
-            print(f"   완료된 작업: {len(completed_tasks)}개")
+            for task_id, cnt in existing_counts.items():
+                print(f"   - {task_id}: {cnt}건")
 
-    # 작업 목록 생성
+    # 작업 목록 생성 (부족한 수량만 생성)
     tasks = []
     for cat in categories:
         if distribution:
             for d in dist_config:
                 task_id = f"{cat.value}/{d['name']}"
-                if task_id not in completed_tasks:
-                    # 특정 턴 타입만 지정 시 비율 무시하고 count 사용
-                    if turn_type:
-                        task_count = count
-                    else:
-                        task_count = max(1, int(count * d['ratio']))
+                if turn_type:
+                    target_count = count
+                else:
+                    target_count = max(1, int(count * d['ratio']))
+
+                existing = existing_counts.get(task_id, 0)
+                remaining = target_count - existing
+
+                if remaining > 0:
                     tasks.append({
                         "category": cat,
                         "turn_type": d['name'],
                         "min_turns": d['min'],
                         "max_turns": d['max'],
-                        "count": task_count,
+                        "count": remaining,
+                        "target_count": target_count,
+                        "existing_count": existing,
                         "task_id": task_id,
                     })
         else:
-            if cat.value not in completed_tasks:
+            existing = existing_counts.get(cat.value, 0)
+            remaining = count - existing
+
+            if remaining > 0:
                 tasks.append({
                     "category": cat,
                     "turn_type": None,
                     "min_turns": min_turns,
                     "max_turns": max_turns,
-                    "count": count,
+                    "count": remaining,
+                    "target_count": count,
+                    "existing_count": existing,
                     "task_id": cat.value,
                 })
 
@@ -823,14 +862,23 @@ async def run_batch_api_mode(
         cat = task['category']
         turn_type = task['turn_type']
         task_count = task['count']
+        existing_count = task.get('existing_count', 0)
+        target_count = task.get('target_count', task_count)
 
         print(f"\n{'=' * 60}")
         if turn_type:
             print(f"📂 작업 [{task_idx + 1}/{len(tasks)}]: {cat.value}/{turn_type}")
-            print(f"   {CounselingCategory.get_korean_name(cat)} - {task['min_turns']}~{task['max_turns']}턴")
+            if existing_count > 0:
+                print(f"   {CounselingCategory.get_korean_name(cat)} - {task['min_turns']}~{task['max_turns']}턴")
+                print(f"   기존: {existing_count}건 → 추가 생성: {task_count}건 (목표: {target_count}건)")
+            else:
+                print(f"   {CounselingCategory.get_korean_name(cat)} - {task['min_turns']}~{task['max_turns']}턴, {task_count}건")
         else:
             print(f"📂 작업 [{task_idx + 1}/{len(tasks)}]: {cat.value}")
-            print(f"   ({CounselingCategory.get_korean_name(cat)})")
+            if existing_count > 0:
+                print(f"   기존: {existing_count}건 → 추가 생성: {task_count}건 (목표: {target_count}건)")
+            else:
+                print(f"   ({CounselingCategory.get_korean_name(cat)}) - {task_count}건")
         print("=" * 60)
 
         # BatchClient 초기화 (카테고리별 트랙 확인)
