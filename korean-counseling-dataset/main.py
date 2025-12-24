@@ -44,6 +44,26 @@ from pipeline.orchestrator import PipelineOrchestrator, PipelineConfig
 from models.prompts import get_system_prompt, get_scenario_prompt
 
 
+# 턴 분포 설정
+TURN_DISTRIBUTIONS = {
+    "balanced": [
+        {"name": "short", "min": 5, "max": 10, "ratio": 0.20},   # 20%
+        {"name": "medium", "min": 15, "max": 25, "ratio": 0.60}, # 60%
+        {"name": "long", "min": 30, "max": 40, "ratio": 0.20},   # 20%
+    ],
+    "short-focus": [
+        {"name": "short", "min": 5, "max": 10, "ratio": 0.60},
+        {"name": "medium", "min": 15, "max": 25, "ratio": 0.30},
+        {"name": "long", "min": 30, "max": 40, "ratio": 0.10},
+    ],
+    "long-focus": [
+        {"name": "short", "min": 5, "max": 10, "ratio": 0.10},
+        {"name": "medium", "min": 15, "max": 25, "ratio": 0.30},
+        {"name": "long", "min": 30, "max": 40, "ratio": 0.60},
+    ],
+}
+
+
 # 로깅 설정
 def setup_logging(level: str = "INFO") -> None:
     """로깅 설정"""
@@ -423,12 +443,14 @@ async def run_batch_api_mode(
     output: Optional[str] = None,
     poll_interval: int = 60,
     resume: Optional[str] = None,
+    distribution: Optional[str] = None,
 ) -> None:
     """
     Batch API 모드 - 50% 비용 절감, 카테고리별 분리 실행
 
     각 카테고리를 개별 Batch 작업으로 제출하여 완료 시 즉시 저장.
     중단 시에도 완료된 카테고리는 보존됨.
+    --distribution 옵션으로 턴 분포 적용 가능.
     """
     import json
     import signal
@@ -462,33 +484,70 @@ async def run_batch_api_mode(
 
     job_dir = output_path / job_id
 
-    # 이어서 시작: 완료된 카테고리 확인
-    completed_categories = []
+    # 분포 설정
+    if distribution:
+        dist_config = TURN_DISTRIBUTIONS[distribution]
+        print(f"\n📊 턴 분포: {distribution}")
+        for d in dist_config:
+            print(f"   - {d['name']}: {d['min']}~{d['max']}턴 ({int(d['ratio']*100)}%)")
+    else:
+        dist_config = None
+
+    # 이어서 시작: 완료된 작업 확인
+    completed_tasks = set()
     if job_dir.exists():
+        # 분포 모드: 카테고리/턴타입.jsonl 구조
+        for cat_dir in job_dir.iterdir():
+            if cat_dir.is_dir():
+                for file_path in cat_dir.glob("*.jsonl"):
+                    completed_tasks.add(f"{cat_dir.name}/{file_path.stem}")
+        # 일반 모드: 카테고리.jsonl 구조
         for file_path in job_dir.glob("*.jsonl"):
             if file_path.stem not in ["sessions", "responses"]:
-                completed_categories.append(file_path.stem)
+                completed_tasks.add(file_path.stem)
 
-        if completed_categories:
+        if completed_tasks:
             print(f"\n📋 이전 작업 발견 (작업 ID: {job_id}):")
-            print(f"   완료된 카테고리: {completed_categories}")
+            print(f"   완료된 작업: {len(completed_tasks)}개")
 
-            # 완료된 카테고리 제외
-            categories = [c for c in categories if c.value not in completed_categories]
+    # 작업 목록 생성
+    tasks = []
+    for cat in categories:
+        if distribution:
+            for d in dist_config:
+                task_id = f"{cat.value}/{d['name']}"
+                if task_id not in completed_tasks:
+                    task_count = max(1, int(count * d['ratio']))
+                    tasks.append({
+                        "category": cat,
+                        "turn_type": d['name'],
+                        "min_turns": d['min'],
+                        "max_turns": d['max'],
+                        "count": task_count,
+                        "task_id": task_id,
+                    })
+        else:
+            if cat.value not in completed_tasks:
+                tasks.append({
+                    "category": cat,
+                    "turn_type": None,
+                    "min_turns": min_turns,
+                    "max_turns": max_turns,
+                    "count": count,
+                    "task_id": cat.value,
+                })
 
-            if not categories:
-                print(f"\n✅ 모든 카테고리가 이미 완료되었습니다!")
-                return
+    if not tasks:
+        print(f"\n✅ 모든 작업이 이미 완료되었습니다!")
+        return
 
-            print(f"   남은 카테고리: {[c.value for c in categories]}")
-
-    total_count = len(categories) * count
+    total_count = sum(t['count'] for t in tasks)
 
     print(f"\n📋 설정:")
     print(f"  - 트랙: {track}")
     print(f"  - 작업 ID: {job_id}")
     print(f"  - 카테고리: {[c.value for c in categories]}")
-    print(f"  - 카테고리당 생성 수: {count}")
+    print(f"  - 남은 작업: {len(tasks)}개")
     print(f"  - 총 예상 생성: {total_count}건")
 
     # 비용 추정 (Batch 가격)
@@ -500,8 +559,8 @@ async def run_batch_api_mode(
     )
     print(f"  - 예상 비용: ${estimated_cost:.2f} (Batch 가격)")
     print(f"  - 폴링 간격: {poll_interval}초")
-    print(f"\n⚠️  Batch API는 카테고리당 최대 24시간 소요될 수 있습니다.")
-    print(f"✅ 각 카테고리 완료 시 즉시 저장됩니다.")
+    print(f"\n⚠️  Batch API는 작업당 최대 24시간 소요될 수 있습니다.")
+    print(f"✅ 각 작업 완료 시 즉시 저장됩니다.")
 
     # 확인
     confirm = input("\n계속 진행하시겠습니까? (y/N): ")
@@ -521,24 +580,34 @@ async def run_batch_api_mode(
             print("\n\n⚠️  강제 종료...")
             sys.exit(1)
         shutdown_requested = True
-        print("\n\n⚠️  현재 카테고리 완료 후 종료합니다. (다시 Ctrl+C: 강제 종료)")
+        print("\n\n⚠️  현재 작업 완료 후 종료합니다. (다시 Ctrl+C: 강제 종료)")
 
     signal.signal(signal.SIGINT, signal_handler)
 
     # 결과 추적
     total_success = 0
     total_failed = 0
-    total_cost = 0.0
+    total_cost_result = 0.0
+    last_task_idx = 0
 
-    # 카테고리별 처리
-    for cat_idx, cat in enumerate(categories):
+    # 작업별 처리
+    for task_idx, task in enumerate(tasks):
+        last_task_idx = task_idx
         if shutdown_requested:
             print(f"\n⚠️  사용자 요청으로 중지됨")
             break
 
+        cat = task['category']
+        turn_type = task['turn_type']
+        task_count = task['count']
+
         print(f"\n{'=' * 60}")
-        print(f"📂 카테고리 [{cat_idx + 1}/{len(categories)}]: {cat.value}")
-        print(f"   ({CounselingCategory.get_korean_name(cat)})")
+        if turn_type:
+            print(f"📂 작업 [{task_idx + 1}/{len(tasks)}]: {cat.value}/{turn_type}")
+            print(f"   {CounselingCategory.get_korean_name(cat)} - {task['min_turns']}~{task['max_turns']}턴")
+        else:
+            print(f"📂 작업 [{task_idx + 1}/{len(tasks)}]: {cat.value}")
+            print(f"   ({CounselingCategory.get_korean_name(cat)})")
         print("=" * 60)
 
         # BatchClient 초기화 (카테고리별 트랙 확인)
@@ -546,15 +615,15 @@ async def run_batch_api_mode(
         client = BatchClient(track=track_for_cat)
 
         # 프롬프트 생성
-        print(f"\n⏳ 프롬프트 생성 중... ({count}건)")
+        print(f"\n⏳ 프롬프트 생성 중... ({task_count}건)")
         system_prompt = get_system_prompt(track=track_for_cat, include_thinking=True)
         prompts = []
 
-        for i in range(count):
+        for i in range(task_count):
             scenario_prompt = get_scenario_prompt(
                 category=cat,
-                min_turns=min_turns,
-                max_turns=max_turns,
+                min_turns=task['min_turns'],
+                max_turns=task['max_turns'],
             )
             user_prompt = f"""
 다음 시나리오에 맞는 심리상담 세션을 생성해주세요.
@@ -568,6 +637,7 @@ async def run_batch_api_mode(
                 "system": system_prompt,
                 "user": user_prompt,
                 "category": cat.value,
+                "turn_type": turn_type,
             })
 
         # 요청 빌드
@@ -576,14 +646,15 @@ async def run_batch_api_mode(
         # 배치 작업 제출
         print(f"⏳ 배치 작업 제출 중...")
         try:
+            display_name = f"counseling-{cat.value}-{turn_type}-{task_count}" if turn_type else f"counseling-{cat.value}-{task_count}"
             batch_job = await client.create_batch_job(
                 requests=requests,
-                display_name=f"counseling-{cat.value}-{count}",
+                display_name=display_name,
             )
             print(f"✅ 제출 완료 (작업: {batch_job.job_name})")
 
             # 완료 대기
-            print(f"⏳ 완료 대기 중... (Ctrl+C: 현재 카테고리 완료 후 중지)")
+            print(f"⏳ 완료 대기 중... (Ctrl+C: 현재 작업 완료 후 중지)")
 
             def progress_callback(state: str):
                 print(f"   상태: {state}")
@@ -594,29 +665,44 @@ async def run_batch_api_mode(
                 progress_callback=progress_callback,
             )
 
-            # 카테고리별 결과 저장
-            cat_file = job_dir / f"{cat.value}.jsonl"
-            with open(cat_file, "w", encoding="utf-8") as f:
+            # 결과 저장 (분포 모드: 카테고리/턴타입.jsonl, 일반 모드: 카테고리.jsonl)
+            if turn_type:
+                cat_dir = job_dir / cat.value
+                cat_dir.mkdir(parents=True, exist_ok=True)
+                save_file = cat_dir / f"{turn_type}.jsonl"
+            else:
+                save_file = job_dir / f"{cat.value}.jsonl"
+
+            with open(save_file, "w", encoding="utf-8") as f:
                 for i, resp in enumerate(result.responses):
                     line = json.dumps({
                         "index": i,
                         "category": cat.value,
+                        "turn_type": turn_type,
+                        "min_turns": task['min_turns'],
+                        "max_turns": task['max_turns'],
                         "text": resp.get("text", ""),
                     }, ensure_ascii=False)
                     f.write(line + "\n")
 
-            print(f"\n✅ 카테고리 완료: {cat.value}")
+            if turn_type:
+                print(f"\n✅ 작업 완료: {cat.value}/{turn_type}")
+            else:
+                print(f"\n✅ 작업 완료: {cat.value}")
             print(f"   - 성공: {len(result.responses)}건")
             print(f"   - 실패: {len(result.errors)}건")
             print(f"   - 비용: ${result.estimated_cost:.2f}")
-            print(f"   - 저장: {cat_file}")
+            print(f"   - 저장: {save_file}")
 
             total_success += len(result.responses)
             total_failed += len(result.errors)
-            total_cost += result.estimated_cost
+            total_cost_result += result.estimated_cost
 
         except Exception as e:
-            print(f"\n❌ 카테고리 실패: {cat.value}")
+            if turn_type:
+                print(f"\n❌ 작업 실패: {cat.value}/{turn_type}")
+            else:
+                print(f"\n❌ 작업 실패: {cat.value}")
             print(f"   오류: {e}")
             continue
 
@@ -625,18 +711,19 @@ async def run_batch_api_mode(
     print("📊 Batch API 처리 완료")
     print("=" * 60)
     print(f"  - 작업 ID: {job_id}")
-    print(f"  - 완료 카테고리: {len(completed_categories) + cat_idx + 1 - (1 if shutdown_requested else 0)}")
+    print(f"  - 완료 작업: {len(completed_tasks) + last_task_idx + 1 - (1 if shutdown_requested else 0)}개")
     print(f"  - 총 성공: {total_success}건")
     print(f"  - 총 실패: {total_failed}건")
-    print(f"  - 총 비용: ${total_cost:.2f}")
+    print(f"  - 총 비용: ${total_cost_result:.2f}")
     print(f"  - 저장 위치: {job_dir}")
 
-    if shutdown_requested or (cat_idx + 1 < len(categories)):
-        remaining = [c.value for c in categories[cat_idx + (0 if shutdown_requested else 1):]]
-        if remaining:
-            print(f"\n⚠️  남은 카테고리: {remaining}")
-            print(f"이어서 시작하려면:")
-            print(f"  python main.py --mode batch-api --track {track} --count {count} --output {output_path} --resume {job_id}")
+    # 남은 작업 안내
+    remaining_tasks = tasks[last_task_idx + (0 if shutdown_requested else 1):]
+    if remaining_tasks:
+        print(f"\n⚠️  남은 작업: {len(remaining_tasks)}개")
+        print(f"이어서 시작하려면:")
+        dist_opt = f" --distribution {distribution}" if distribution else ""
+        print(f"  python main.py --mode batch-api --track {track} --count {count}{dist_opt} --output {output_path} --resume {job_id}")
 
 
 def print_categories() -> None:
@@ -736,6 +823,14 @@ def main():
         type=int,
         default=10,
         help="최대 대화 턴 수 (default: 10)",
+    )
+
+    # 턴 분포
+    parser.add_argument(
+        "--distribution",
+        type=str,
+        choices=["balanced", "short-focus", "long-focus"],
+        help="턴 분포: balanced(20/60/20), short-focus(60/30/10), long-focus(10/30/60)",
     )
 
     # 검증
@@ -840,6 +935,7 @@ def main():
             max_turns=args.max_turns,
             output=args.output,
             resume=args.resume,
+            distribution=args.distribution,
         ))
 
     elif args.mode == "pipeline":
