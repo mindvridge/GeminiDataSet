@@ -37,6 +37,7 @@ from models.prompts import (
     get_scenario_prompt,
     TRACK_A_CATEGORIES,
 )
+from models.scenario_variation import generate_varied_scenario_prompt
 
 from .gemini_client import GeminiClient, ThinkingConfig, create_pro_client
 
@@ -124,6 +125,7 @@ class CrisisGenerator:
         min_turns: int = 5,
         max_turns: int = 10,
         custom_scenario: Optional[str] = None,
+        use_variation: bool = True,
     ) -> Optional[CounselingSession]:
         """
         단일 상담 세션 생성
@@ -133,6 +135,7 @@ class CrisisGenerator:
             min_turns: 최소 대화 턴 수
             max_turns: 최대 대화 턴 수
             custom_scenario: 커스텀 시나리오 (선택적)
+            use_variation: 시나리오 변형 사용 여부 (기본값: True)
 
         Returns:
             생성된 CounselingSession 또는 None (실패 시)
@@ -142,13 +145,20 @@ class CrisisGenerator:
         # 시스템 프롬프트 구성
         system_prompt = get_system_prompt(track="A", include_thinking=True)
 
-        # 시나리오 프롬프트 구성
-        scenario_prompt = get_scenario_prompt(
-            category=category,
-            min_turns=min_turns,
-            max_turns=max_turns,
-            custom_scenario=custom_scenario
-        )
+        # 시나리오 프롬프트 구성 (변형 사용 시 다양성 강화)
+        if use_variation and not custom_scenario:
+            scenario_prompt = generate_varied_scenario_prompt(
+                category=category,
+                min_turns=min_turns,
+                max_turns=max_turns,
+            )
+        else:
+            scenario_prompt = get_scenario_prompt(
+                category=category,
+                min_turns=min_turns,
+                max_turns=max_turns,
+                custom_scenario=custom_scenario
+            )
 
         user_prompt = f"""
 다음 시나리오에 맞는 심리상담 세션을 생성해주세요.
