@@ -425,10 +425,15 @@ async def run_batch_api_mode(
     resume: Optional[str] = None,
 ) -> None:
     """
-    Batch API 모드 - 50% 비용 절감
+    Batch API 모드 - 50% 비용 절감, 카테고리별 분리 실행
 
-    Standard API 대신 Batch API를 사용하여 대량 데이터 생성
+    각 카테고리를 개별 Batch 작업으로 제출하여 완료 시 즉시 저장.
+    중단 시에도 완료된 카테고리는 보존됨.
     """
+    import json
+    import signal
+    from uuid import uuid4
+
     print("\n" + "=" * 60)
     if resume:
         print("📦 Batch API 모드 (50% 비용 절감) - 이어서 시작")
@@ -446,38 +451,42 @@ async def run_batch_api_mode(
     else:
         categories = TRACK_A_CATEGORIES + TRACK_B_CATEGORIES
 
-    # 출력 경로 (이어서 시작 확인을 위해 먼저 설정)
+    # 출력 경로 설정
     output_path = Path(output) if output else Path("data/batch")
+
+    # 작업 ID 결정 (resume 또는 새로 생성)
+    if resume:
+        job_id = resume
+    else:
+        job_id = str(uuid4())
+
+    job_dir = output_path / job_id
 
     # 이어서 시작: 완료된 카테고리 확인
     completed_categories = []
-    if resume:
-        resume_dir = output_path / resume
-        if resume_dir.exists():
-            for file_path in resume_dir.glob("*.jsonl"):
-                if file_path.stem not in ["sessions", "responses"]:
-                    completed_categories.append(file_path.stem)
+    if job_dir.exists():
+        for file_path in job_dir.glob("*.jsonl"):
+            if file_path.stem not in ["sessions", "responses"]:
+                completed_categories.append(file_path.stem)
 
-            if completed_categories:
-                print(f"\n📋 이전 작업 발견 (작업 ID: {resume}):")
-                print(f"   완료된 카테고리: {completed_categories}")
+        if completed_categories:
+            print(f"\n📋 이전 작업 발견 (작업 ID: {job_id}):")
+            print(f"   완료된 카테고리: {completed_categories}")
 
-                # 완료된 카테고리 제외
-                categories = [c for c in categories if c.value not in completed_categories]
+            # 완료된 카테고리 제외
+            categories = [c for c in categories if c.value not in completed_categories]
 
-                if not categories:
-                    print(f"\n✅ 모든 카테고리가 이미 완료되었습니다!")
-                    return
+            if not categories:
+                print(f"\n✅ 모든 카테고리가 이미 완료되었습니다!")
+                return
 
-                print(f"   남은 카테고리: {[c.value for c in categories]}")
-        else:
-            print(f"\n⚠️  작업 ID '{resume}'를 찾을 수 없습니다. 새로 시작합니다.")
-            resume = None
+            print(f"   남은 카테고리: {[c.value for c in categories]}")
 
     total_count = len(categories) * count
 
     print(f"\n📋 설정:")
     print(f"  - 트랙: {track}")
+    print(f"  - 작업 ID: {job_id}")
     print(f"  - 카테고리: {[c.value for c in categories]}")
     print(f"  - 카테고리당 생성 수: {count}")
     print(f"  - 총 예상 생성: {total_count}건")
@@ -491,7 +500,8 @@ async def run_batch_api_mode(
     )
     print(f"  - 예상 비용: ${estimated_cost:.2f} (Batch 가격)")
     print(f"  - 폴링 간격: {poll_interval}초")
-    print(f"\n⚠️  Batch API는 최대 24시간 소요될 수 있습니다.")
+    print(f"\n⚠️  Batch API는 카테고리당 최대 24시간 소요될 수 있습니다.")
+    print(f"✅ 각 카테고리 완료 시 즉시 저장됩니다.")
 
     # 확인
     confirm = input("\n계속 진행하시겠습니까? (y/N): ")
@@ -500,18 +510,45 @@ async def run_batch_api_mode(
         return
 
     # 출력 경로 생성
-    output_path.mkdir(parents=True, exist_ok=True)
+    job_dir.mkdir(parents=True, exist_ok=True)
 
-    # BatchClient 초기화
-    actual_track = "A" if track == "A" else "B"
-    client = BatchClient(track=actual_track)
+    # Graceful shutdown 설정
+    shutdown_requested = False
 
-    # 프롬프트 생성
-    print("\n⏳ 프롬프트 생성 중...")
-    prompts = []
-    for cat in categories:
+    def signal_handler(signum, frame):
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            print("\n\n⚠️  강제 종료...")
+            sys.exit(1)
+        shutdown_requested = True
+        print("\n\n⚠️  현재 카테고리 완료 후 종료합니다. (다시 Ctrl+C: 강제 종료)")
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    # 결과 추적
+    total_success = 0
+    total_failed = 0
+    total_cost = 0.0
+
+    # 카테고리별 처리
+    for cat_idx, cat in enumerate(categories):
+        if shutdown_requested:
+            print(f"\n⚠️  사용자 요청으로 중지됨")
+            break
+
+        print(f"\n{'=' * 60}")
+        print(f"📂 카테고리 [{cat_idx + 1}/{len(categories)}]: {cat.value}")
+        print(f"   ({CounselingCategory.get_korean_name(cat)})")
+        print("=" * 60)
+
+        # BatchClient 초기화 (카테고리별 트랙 확인)
         track_for_cat = CounselingCategory.get_track(cat)
+        client = BatchClient(track=track_for_cat)
+
+        # 프롬프트 생성
+        print(f"\n⏳ 프롬프트 생성 중... ({count}건)")
         system_prompt = get_system_prompt(track=track_for_cat, include_thinking=True)
+        prompts = []
 
         for i in range(count):
             scenario_prompt = get_scenario_prompt(
@@ -533,74 +570,73 @@ async def run_batch_api_mode(
                 "category": cat.value,
             })
 
-    print(f"✅ 프롬프트 생성 완료: {len(prompts)}건")
+        # 요청 빌드
+        requests = client.build_requests(prompts)
 
-    # 요청 빌드
-    requests = client.build_requests(prompts)
+        # 배치 작업 제출
+        print(f"⏳ 배치 작업 제출 중...")
+        try:
+            batch_job = await client.create_batch_job(
+                requests=requests,
+                display_name=f"counseling-{cat.value}-{count}",
+            )
+            print(f"✅ 제출 완료 (작업: {batch_job.job_name})")
 
-    # 배치 작업 제출
-    print("\n⏳ 배치 작업 제출 중...")
-    job = await client.create_batch_job(
-        requests=requests,
-        display_name=f"counseling-{track}-{len(prompts)}",
-    )
-    print(f"✅ 배치 작업 제출 완료")
-    print(f"   - 작업 ID: {job.job_id}")
-    print(f"   - 작업 이름: {job.job_name}")
-    print(f"   - 상태: {job.state}")
+            # 완료 대기
+            print(f"⏳ 완료 대기 중... (Ctrl+C: 현재 카테고리 완료 후 중지)")
 
-    # 작업 정보 저장
-    job_info_path = output_path / f"batch_job_{job.job_id}.json"
-    import json
-    with open(job_info_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "job_id": job.job_id,
-            "job_name": job.job_name,
-            "state": job.state,
-            "created_at": job.created_at.isoformat(),
-            "total_requests": job.total_requests,
-            "track": track,
-            "categories": [c.value for c in categories],
-            "count_per_category": count,
-        }, f, ensure_ascii=False, indent=2)
-    print(f"   - 작업 정보 저장: {job_info_path}")
+            def progress_callback(state: str):
+                print(f"   상태: {state}")
 
-    # 완료 대기
-    print(f"\n⏳ 배치 작업 완료 대기 중... (Ctrl+C로 백그라운드 전환)")
-    print(f"   (작업이 완료되면 자동으로 결과를 저장합니다)")
+            result = await client.wait_for_completion(
+                batch_job,
+                poll_interval=poll_interval,
+                progress_callback=progress_callback,
+            )
 
-    def progress_callback(state: str):
-        print(f"   상태: {state}")
+            # 카테고리별 결과 저장
+            cat_file = job_dir / f"{cat.value}.jsonl"
+            with open(cat_file, "w", encoding="utf-8") as f:
+                for i, resp in enumerate(result.responses):
+                    line = json.dumps({
+                        "index": i,
+                        "category": cat.value,
+                        "text": resp.get("text", ""),
+                    }, ensure_ascii=False)
+                    f.write(line + "\n")
 
-    try:
-        result = await client.wait_for_completion(
-            job,
-            poll_interval=poll_interval,
-            progress_callback=progress_callback,
-        )
+            print(f"\n✅ 카테고리 완료: {cat.value}")
+            print(f"   - 성공: {len(result.responses)}건")
+            print(f"   - 실패: {len(result.errors)}건")
+            print(f"   - 비용: ${result.estimated_cost:.2f}")
+            print(f"   - 저장: {cat_file}")
 
-        # 결과 저장
-        print(f"\n✅ 배치 작업 완료!")
-        print(f"   - 성공: {len(result.responses)}건")
-        print(f"   - 실패: {len(result.errors)}건")
-        print(f"   - 예상 비용: ${result.estimated_cost:.2f}")
+            total_success += len(result.responses)
+            total_failed += len(result.errors)
+            total_cost += result.estimated_cost
 
-        # 응답 저장
-        responses_path = output_path / f"responses_{job.job_id}.jsonl"
-        with open(responses_path, "w", encoding="utf-8") as f:
-            for i, resp in enumerate(result.responses):
-                line = json.dumps({
-                    "index": i,
-                    "category": prompts[i]["category"] if i < len(prompts) else None,
-                    "text": resp.get("text", ""),
-                }, ensure_ascii=False)
-                f.write(line + "\n")
-        print(f"   - 응답 저장: {responses_path}")
+        except Exception as e:
+            print(f"\n❌ 카테고리 실패: {cat.value}")
+            print(f"   오류: {e}")
+            continue
 
-    except KeyboardInterrupt:
-        print(f"\n\n⚠️  백그라운드로 전환됨")
-        print(f"   작업 이름: {job.job_name}")
-        print(f"   나중에 상태 확인: python main.py --mode batch-status --job-name {job.job_name}")
+    # 최종 결과
+    print(f"\n{'=' * 60}")
+    print("📊 Batch API 처리 완료")
+    print("=" * 60)
+    print(f"  - 작업 ID: {job_id}")
+    print(f"  - 완료 카테고리: {len(completed_categories) + cat_idx + 1 - (1 if shutdown_requested else 0)}")
+    print(f"  - 총 성공: {total_success}건")
+    print(f"  - 총 실패: {total_failed}건")
+    print(f"  - 총 비용: ${total_cost:.2f}")
+    print(f"  - 저장 위치: {job_dir}")
+
+    if shutdown_requested or (cat_idx + 1 < len(categories)):
+        remaining = [c.value for c in categories[cat_idx + (0 if shutdown_requested else 1):]]
+        if remaining:
+            print(f"\n⚠️  남은 카테고리: {remaining}")
+            print(f"이어서 시작하려면:")
+            print(f"  python main.py --mode batch-api --track {track} --count {count} --output {output_path} --resume {job_id}")
 
 
 def print_categories() -> None:
