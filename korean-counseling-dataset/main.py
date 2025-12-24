@@ -242,13 +242,19 @@ async def run_batch_mode(
     validate: bool = True,
     output: Optional[str] = None,
     resume: Optional[str] = None,
+    distribution: Optional[str] = None,
+    turn_type: Optional[str] = None,
 ) -> None:
-    """배치 생성 모드"""
+    """
+    배치 생성 모드 (Standard API)
+
+    BLOCK_NONE 안전 설정이 적용되며, --distribution 옵션으로 턴 분포 적용 가능.
+    """
     print("\n" + "=" * 60)
     if resume:
-        print("📦 배치 생성 모드 (이어서 시작)")
+        print("📦 배치 생성 모드 (이어서 시작) - BLOCK_NONE 적용")
     else:
-        print("📦 배치 생성 모드")
+        print("📦 배치 생성 모드 - BLOCK_NONE 적용")
     print("=" * 60)
 
     # 카테고리 결정
@@ -261,74 +267,153 @@ async def run_batch_mode(
     else:  # all
         categories = TRACK_A_CATEGORIES + TRACK_B_CATEGORIES
 
+    # 분포 설정
+    if distribution:
+        dist_config = TURN_DISTRIBUTIONS[distribution]
+        if turn_type:
+            dist_config = [d for d in dist_config if d['name'] == turn_type]
+            print(f"\n📊 턴 분포: {distribution} (필터: {turn_type})")
+        else:
+            print(f"\n📊 턴 분포: {distribution}")
+        for d in dist_config:
+            print(f"   - {d['name']}: {d['min']}~{d['max']}턴 ({int(d['ratio']*100)}%)")
+    else:
+        dist_config = None
+
+    # 출력 경로 설정
+    output_path = Path(output) if output else Path("data/raw")
+
+    # 작업 목록 생성
+    tasks = []
+    for cat in categories:
+        if distribution:
+            for d in dist_config:
+                if turn_type:
+                    task_count = count
+                else:
+                    task_count = max(1, int(count * d['ratio']))
+                tasks.append({
+                    "category": cat,
+                    "turn_type": d['name'],
+                    "min_turns": d['min'],
+                    "max_turns": d['max'],
+                    "count": task_count,
+                })
+        else:
+            tasks.append({
+                "category": cat,
+                "turn_type": None,
+                "min_turns": min_turns,
+                "max_turns": max_turns,
+                "count": count,
+            })
+
+    total_count = sum(t['count'] for t in tasks)
+
     print(f"\n📋 설정:")
     print(f"  - 트랙: {track}")
     print(f"  - 카테고리: {[c.value for c in categories]}")
-    print(f"  - 카테고리당 생성 수: {count}")
-    print(f"  - 총 예상 생성: {len(categories) * count}건")
+    print(f"  - 작업 수: {len(tasks)}개")
+    print(f"  - 총 예상 생성: {total_count}건")
     print(f"  - 품질 검증: {'예' if validate else '아니오'}")
-
-    # 배치 처리기 생성 (출력 경로 설정)
-    output_path = Path(output) if output else Path("data/raw")
     print(f"  - 출력 경로: {output_path.absolute()}")
-    processor = BatchProcessor(output_dir=output_path)
 
-    # 이어서 시작 정보 확인
-    if resume:
-        resume_info = processor.get_resume_info(resume)
-        if resume_info["exists"]:
-            print(f"\n📋 이전 작업 발견:")
-            print(f"  - 작업 ID: {resume}")
-            print(f"  - 완료된 카테고리: {resume_info['completed_categories']}")
-            print(f"  - 저장된 세션: {resume_info['total_sessions']}건")
-        else:
-            print(f"\n⚠️  작업 ID '{resume}'를 찾을 수 없습니다. 새로 시작합니다.")
-            resume = None
+    # 비용 추정 (Standard 가격) - 턴 수 기반 계산
+    TOKENS_INPUT_BASE = 700
+    TOKENS_PER_TURN = 300
+
+    estimated_input_tokens = 0
+    estimated_output_tokens = 0
+
+    for task in tasks:
+        avg_turns = (task['min_turns'] + task['max_turns']) / 2
+        task_input = task['count'] * TOKENS_INPUT_BASE
+        task_output = task['count'] * avg_turns * TOKENS_PER_TURN
+        estimated_input_tokens += task_input
+        estimated_output_tokens += task_output
+
+    # Standard API 가격 (Batch의 2배)
+    estimated_cost = (
+        (estimated_input_tokens / 1_000_000) * 2.00 +  # 입력 $2.00/1M
+        (estimated_output_tokens / 1_000_000) * 12.00  # 출력 $12.00/1M
+    )
+
+    print(f"  - 예상 입력 토큰: {estimated_input_tokens:,}")
+    print(f"  - 예상 출력 토큰: {estimated_output_tokens:,}")
+    print(f"  - 예상 비용: ${estimated_cost:.2f} (Standard 가격)")
 
     # 예산 한도 표시
     settings = get_settings()
     if settings.max_budget_usd > 0:
         print(f"  - 예산 한도: ${settings.max_budget_usd:.2f}")
-    else:
-        print(f"  - 예산 한도: 무제한")
 
-    # 작업 생성
-    job = processor.create_job(
-        name=f"배치 생성 - {track}",
-        track=track,
-        categories=categories,
-        count_per_category=count,
-        min_turns=min_turns,
-        max_turns=max_turns,
-        validate=validate,
-        resume_job_id=resume,
-    )
+    # 배치 처리기 생성
+    processor = BatchProcessor(output_dir=output_path)
 
-    if resume:
-        print(f"\n⏳ 배치 처리 이어서 시작... (작업 ID: {job.job_id})")
-    else:
-        print(f"\n⏳ 배치 처리 시작... (작업 ID: {job.job_id})")
+    # 결과 집계
+    total_generated = 0
+    total_failed = 0
+    total_validated = 0
+    total_rejected = 0
+    total_cost = 0.0
+    all_errors = []
 
-    # 실행
-    result = await processor.run(job)
+    print(f"\n⏳ 배치 처리 시작...")
 
-    # 결과 출력
+    # 작업별 처리
+    for task_idx, task in enumerate(tasks):
+        cat = task['category']
+        t_type = task['turn_type']
+        task_count = task['count']
+
+        print(f"\n{'=' * 60}")
+        if t_type:
+            print(f"📂 작업 [{task_idx + 1}/{len(tasks)}]: {cat.value}/{t_type}")
+            print(f"   {CounselingCategory.get_korean_name(cat)} - {task['min_turns']}~{task['max_turns']}턴, {task_count}건")
+        else:
+            print(f"📂 작업 [{task_idx + 1}/{len(tasks)}]: {cat.value}")
+            print(f"   ({CounselingCategory.get_korean_name(cat)}) - {task_count}건")
+        print("=" * 60)
+
+        # 작업 생성
+        job = processor.create_job(
+            name=f"배치-{cat.value}-{t_type}" if t_type else f"배치-{cat.value}",
+            track=track,
+            categories=[cat],
+            count_per_category=task_count,
+            min_turns=task['min_turns'],
+            max_turns=task['max_turns'],
+            validate=validate,
+        )
+
+        # 실행
+        result = await processor.run(job)
+
+        # 결과 집계
+        total_generated += result.total_generated
+        total_failed += result.total_failed
+        total_validated += result.total_validated
+        total_rejected += result.total_rejected
+        total_cost += result.estimated_cost_usd
+        all_errors.extend(result.errors)
+
+        print(f"   ✅ 완료: 성공 {result.total_generated}건, 실패 {result.total_failed}건")
+
+    # 최종 결과 출력
     print("\n" + "=" * 60)
     print("📊 배치 처리 결과")
     print("=" * 60)
-    print(f"  - 총 요청: {result.total_requested}건")
-    print(f"  - 생성 성공: {result.total_generated}건")
-    print(f"  - 생성 실패: {result.total_failed}건")
+    print(f"  - 총 요청: {total_count}건")
+    print(f"  - 생성 성공: {total_generated}건")
+    print(f"  - 생성 실패: {total_failed}건")
     if validate:
-        print(f"  - 검증 통과: {result.total_validated}건")
-        print(f"  - 검증 탈락: {result.total_rejected}건")
-        print(f"  - 평균 품질: {result.average_quality_score:.2f}")
-    print(f"  - 소요 시간: {result.duration_seconds:.1f}초")
-    print(f"  - 예상 비용: ${result.estimated_cost_usd:.2f}")
+        print(f"  - 검증 통과: {total_validated}건")
+        print(f"  - 검증 탈락: {total_rejected}건")
+    print(f"  - 예상 비용: ${total_cost:.2f}")
 
-    if result.errors:
+    if all_errors:
         print(f"\n⚠️  오류 목록:")
-        for err in result.errors[:5]:
+        for err in all_errors[:5]:
             print(f"    - {err}")
 
 
@@ -959,6 +1044,8 @@ def main():
             validate=args.validate,
             output=args.output,
             resume=args.resume,
+            distribution=args.distribution,
+            turn_type=args.turn_type,
         ))
 
     elif args.mode == "batch-api":
