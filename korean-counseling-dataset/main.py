@@ -299,19 +299,28 @@ async def run_batch_mode(
     # 이어서 시작: 완료된 작업 및 기존 세션 수 확인
     existing_counts = {}  # task_id -> existing session count
     if job_dir.exists():
-        # 분포 모드: 카테고리/턴타입.jsonl 구조
-        for cat_dir in job_dir.iterdir():
-            if cat_dir.is_dir():
-                for file_path in cat_dir.glob("*.jsonl"):
-                    task_id = f"{cat_dir.name}/{file_path.stem}"
-                    # 파일 내 세션 수 계산
-                    line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
-                    existing_counts[task_id] = line_count
-        # 일반 모드: 카테고리.jsonl 구조
-        for file_path in job_dir.glob("*.jsonl"):
-            if file_path.stem not in ["sessions", "responses"]:
-                line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
-                existing_counts[file_path.stem] = line_count
+        try:
+            # 분포 모드: 카테고리/턴타입.jsonl 구조
+            for cat_dir in job_dir.iterdir():
+                if cat_dir.is_dir():
+                    for file_path in cat_dir.glob("*.jsonl"):
+                        task_id = f"{cat_dir.name}/{file_path.stem}"
+                        try:
+                            # 파일 내 세션 수 계산
+                            line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
+                            existing_counts[task_id] = line_count
+                        except Exception as e:
+                            logging.warning(f"파일 읽기 오류 ({file_path}): {e}")
+            # 일반 모드: 카테고리.jsonl 구조
+            for file_path in job_dir.glob("*.jsonl"):
+                if file_path.stem not in ["sessions", "responses"]:
+                    try:
+                        line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
+                        existing_counts[file_path.stem] = line_count
+                    except Exception as e:
+                        logging.warning(f"파일 읽기 오류 ({file_path}): {e}")
+        except Exception as e:
+            logging.warning(f"디렉토리 읽기 오류: {e}")
 
         if existing_counts:
             print(f"\n📋 이전 작업 발견 (작업 ID: {job_id}):")
@@ -506,10 +515,19 @@ async def run_batch_mode(
         else:
             save_file = job_dir / f"{cat.value}.jsonl"
 
-        with open(save_file, "w", encoding="utf-8") as f:
-            for session in validated_sessions:
-                line = json.dumps(session.model_dump(mode="json"), ensure_ascii=False)
-                f.write(line + "\n")
+        try:
+            # 기존 데이터 보존하며 추가 (append 모드)
+            with open(save_file, "a", encoding="utf-8") as f:
+                for session in validated_sessions:
+                    try:
+                        line = json.dumps(session.model_dump(mode="json"), ensure_ascii=False)
+                        f.write(line + "\n")
+                        f.flush()  # 즉시 디스크에 기록
+                    except Exception as e:
+                        logging.error(f"세션 저장 오류 ({session.session_id}): {e}")
+        except Exception as e:
+            logging.error(f"파일 저장 오류 ({save_file}): {e}")
+            print(f"   ⚠️ 파일 저장 실패: {e}")
 
         # 통계
         gen_cost = generator.stats.get("estimated_cost", 0.0)
@@ -725,18 +743,27 @@ async def run_batch_api_mode(
     # 이어서 시작: 완료된 작업 및 기존 세션 수 확인
     existing_counts = {}  # task_id -> existing session count
     if job_dir.exists():
-        # 분포 모드: 카테고리/턴타입.jsonl 구조
-        for cat_dir in job_dir.iterdir():
-            if cat_dir.is_dir():
-                for file_path in cat_dir.glob("*.jsonl"):
-                    task_id = f"{cat_dir.name}/{file_path.stem}"
-                    line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
-                    existing_counts[task_id] = line_count
-        # 일반 모드: 카테고리.jsonl 구조
-        for file_path in job_dir.glob("*.jsonl"):
-            if file_path.stem not in ["sessions", "responses"]:
-                line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
-                existing_counts[file_path.stem] = line_count
+        try:
+            # 분포 모드: 카테고리/턴타입.jsonl 구조
+            for cat_dir in job_dir.iterdir():
+                if cat_dir.is_dir():
+                    for file_path in cat_dir.glob("*.jsonl"):
+                        task_id = f"{cat_dir.name}/{file_path.stem}"
+                        try:
+                            line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
+                            existing_counts[task_id] = line_count
+                        except Exception as e:
+                            logging.warning(f"파일 읽기 오류 ({file_path}): {e}")
+            # 일반 모드: 카테고리.jsonl 구조
+            for file_path in job_dir.glob("*.jsonl"):
+                if file_path.stem not in ["sessions", "responses"]:
+                    try:
+                        line_count = sum(1 for _ in open(file_path, encoding='utf-8'))
+                        existing_counts[file_path.stem] = line_count
+                    except Exception as e:
+                        logging.warning(f"파일 읽기 오류 ({file_path}): {e}")
+        except Exception as e:
+            logging.warning(f"디렉토리 읽기 오류: {e}")
 
         if existing_counts:
             print(f"\n📋 이전 작업 발견 (작업 ID: {job_id}):")
@@ -944,17 +971,26 @@ async def run_batch_api_mode(
             else:
                 save_file = job_dir / f"{cat.value}.jsonl"
 
-            with open(save_file, "w", encoding="utf-8") as f:
-                for i, resp in enumerate(result.responses):
-                    line = json.dumps({
-                        "index": i,
-                        "category": cat.value,
-                        "turn_type": turn_type,
-                        "min_turns": task['min_turns'],
-                        "max_turns": task['max_turns'],
-                        "text": resp.get("text", ""),
-                    }, ensure_ascii=False)
-                    f.write(line + "\n")
+            try:
+                # 기존 데이터 보존하며 추가 (append 모드)
+                with open(save_file, "a", encoding="utf-8") as f:
+                    for i, resp in enumerate(result.responses):
+                        try:
+                            line = json.dumps({
+                                "index": i,
+                                "category": cat.value,
+                                "turn_type": turn_type,
+                                "min_turns": task['min_turns'],
+                                "max_turns": task['max_turns'],
+                                "text": resp.get("text", ""),
+                            }, ensure_ascii=False)
+                            f.write(line + "\n")
+                            f.flush()  # 즉시 디스크에 기록
+                        except Exception as e:
+                            logging.error(f"응답 저장 오류: {e}")
+            except Exception as e:
+                logging.error(f"파일 저장 오류 ({save_file}): {e}")
+                print(f"   ⚠️ 파일 저장 실패: {e}")
 
             if turn_type:
                 print(f"\n✅ 작업 완료: {cat.value}/{turn_type}")
