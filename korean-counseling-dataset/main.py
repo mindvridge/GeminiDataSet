@@ -536,7 +536,7 @@ async def run_batch_mode(
     print("📊 배치 처리 완료")
     print("=" * 60)
     print(f"  - 작업 ID: {job_id}")
-    print(f"  - 완료 작업: {len(completed_tasks) + last_task_idx + 1 - (1 if shutdown_requested else 0)}개")
+    print(f"  - 완료 작업: {len(existing_counts) + last_task_idx + 1 - (1 if shutdown_requested else 0)}개")
     print(f"  - 총 생성: {total_generated}건")
     print(f"  - 총 실패: {total_failed}건")
     if validate:
@@ -982,7 +982,7 @@ async def run_batch_api_mode(
     print("📊 Batch API 처리 완료")
     print("=" * 60)
     print(f"  - 작업 ID: {job_id}")
-    print(f"  - 완료 작업: {len(completed_tasks) + last_task_idx + 1 - (1 if shutdown_requested else 0)}개")
+    print(f"  - 완료 작업: {len(existing_counts) + last_task_idx + 1 - (1 if shutdown_requested else 0)}개")
     print(f"  - 총 성공: {total_success}건")
     print(f"  - 총 실패: {total_failed}건")
     print(f"  - 총 비용: ${total_cost_result:.2f}")
