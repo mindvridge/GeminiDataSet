@@ -179,25 +179,30 @@ class BatchClient:
         system_prompt: str,
         user_prompt: str,
     ) -> dict:
-        """단일 요청 빌드"""
+        """
+        단일 요청 빌드
+
+        Note: Batch API는 현재 generationConfig와 safetySettings를 지원하지 않음.
+        https://github.com/googleapis/python-genai/issues/1271
+        https://github.com/googleapis/python-genai/issues/1451
+
+        system_prompt는 별도 system_instruction으로 전달할 수 없으므로
+        user 메시지에 포함하여 전달합니다.
+        """
+        # 시스템 프롬프트와 사용자 프롬프트를 합쳐서 전달
+        combined_prompt = f"""[시스템 지시사항]
+{system_prompt}
+
+[사용자 요청]
+{user_prompt}"""
+
         return {
             'contents': [
                 {
-                    'parts': [{'text': system_prompt}],
-                    'role': 'user'
-                },
-                {
-                    'parts': [{'text': user_prompt}],
+                    'parts': [{'text': combined_prompt}],
                     'role': 'user'
                 }
             ],
-            'generationConfig': {
-                'temperature': self.temperature,
-                'topP': self.settings.top_p,
-                'topK': self.settings.top_k,
-                'maxOutputTokens': self.settings.max_output_tokens,
-            },
-            'safetySettings': self._get_safety_settings(),
         }
 
     def build_requests(
