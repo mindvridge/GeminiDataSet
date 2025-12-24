@@ -171,14 +171,8 @@ class BatchClient:
             # 일반상담: 기본 설정
             safety_config = get_general_safety_settings()
 
-        # Batch API 형식으로 변환
-        safety_settings = []
-        for setting in safety_config:
-            safety_settings.append({
-                'category': setting.category.name if hasattr(setting.category, 'name') else str(setting.category),
-                'threshold': setting.threshold.name if hasattr(setting.threshold, 'name') else str(setting.threshold),
-            })
-        return safety_settings
+        # SafetyConfig 객체의 to_dict_list() 메서드 사용
+        return safety_config.to_dict_list()
 
     def _build_request(
         self,
