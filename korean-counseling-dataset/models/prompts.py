@@ -473,8 +473,10 @@ def get_scenario_prompt(
 다음 조건에 맞는 상담 세션을 생성하세요:
 
 1. **카테고리**: {CounselingCategory.get_korean_name(category)}
-2. **대화 턴 수**: {min_turns}~{max_turns}턴
+2. **대화 턴 수**: **정확히 {min_turns}~{max_turns}턴** (이 범위를 반드시 준수하세요!)
 3. **위험 수준**: {_get_default_risk_level(category)}
+
+⚠️ **중요**: 대화 턴 수가 {min_turns}턴 미만이면 절대 안 됩니다. 최소 {min_turns}턴 이상 생성하세요.
 
 ### 필수 요구사항
 - 각 턴에서 상담사의 **임상적 판단 과정(clinical_reasoning)**을 상세히 기술
