@@ -249,7 +249,12 @@ async def run_batch_mode(
     배치 생성 모드 (Standard API)
 
     BLOCK_NONE 안전 설정이 적용되며, --distribution 옵션으로 턴 분포 적용 가능.
+    저장 구조: <output>/<job_id>/<category>/<turn_type>.jsonl
     """
+    import json
+    import signal
+    from uuid import uuid4
+
     print("\n" + "=" * 60)
     if resume:
         print("📦 배치 생성 모드 (이어서 시작) - BLOCK_NONE 적용")
@@ -267,6 +272,17 @@ async def run_batch_mode(
     else:  # all
         categories = TRACK_A_CATEGORIES + TRACK_B_CATEGORIES
 
+    # 출력 경로 설정
+    output_path = Path(output) if output else Path("data/raw")
+
+    # 작업 ID 결정 (resume 또는 새로 생성)
+    if resume:
+        job_id = resume
+    else:
+        job_id = str(uuid4())
+
+    job_dir = output_path / job_id
+
     # 분포 설정
     if distribution:
         dist_config = TURN_DISTRIBUTIONS[distribution]
@@ -280,43 +296,66 @@ async def run_batch_mode(
     else:
         dist_config = None
 
-    # 출력 경로 설정
-    output_path = Path(output) if output else Path("data/raw")
+    # 이어서 시작: 완료된 작업 확인
+    completed_tasks = set()
+    if job_dir.exists():
+        # 분포 모드: 카테고리/턴타입.jsonl 구조
+        for cat_dir in job_dir.iterdir():
+            if cat_dir.is_dir():
+                for file_path in cat_dir.glob("*.jsonl"):
+                    completed_tasks.add(f"{cat_dir.name}/{file_path.stem}")
+        # 일반 모드: 카테고리.jsonl 구조
+        for file_path in job_dir.glob("*.jsonl"):
+            if file_path.stem not in ["sessions", "responses"]:
+                completed_tasks.add(file_path.stem)
+
+        if completed_tasks:
+            print(f"\n📋 이전 작업 발견 (작업 ID: {job_id}):")
+            print(f"   완료된 작업: {len(completed_tasks)}개")
 
     # 작업 목록 생성
     tasks = []
     for cat in categories:
         if distribution:
             for d in dist_config:
-                if turn_type:
-                    task_count = count
-                else:
-                    task_count = max(1, int(count * d['ratio']))
+                task_id = f"{cat.value}/{d['name']}"
+                if task_id not in completed_tasks:
+                    if turn_type:
+                        task_count = count
+                    else:
+                        task_count = max(1, int(count * d['ratio']))
+                    tasks.append({
+                        "category": cat,
+                        "turn_type": d['name'],
+                        "min_turns": d['min'],
+                        "max_turns": d['max'],
+                        "count": task_count,
+                        "task_id": task_id,
+                    })
+        else:
+            if cat.value not in completed_tasks:
                 tasks.append({
                     "category": cat,
-                    "turn_type": d['name'],
-                    "min_turns": d['min'],
-                    "max_turns": d['max'],
-                    "count": task_count,
+                    "turn_type": None,
+                    "min_turns": min_turns,
+                    "max_turns": max_turns,
+                    "count": count,
+                    "task_id": cat.value,
                 })
-        else:
-            tasks.append({
-                "category": cat,
-                "turn_type": None,
-                "min_turns": min_turns,
-                "max_turns": max_turns,
-                "count": count,
-            })
+
+    if not tasks:
+        print(f"\n✅ 모든 작업이 이미 완료되었습니다!")
+        return
 
     total_count = sum(t['count'] for t in tasks)
 
     print(f"\n📋 설정:")
     print(f"  - 트랙: {track}")
+    print(f"  - 작업 ID: {job_id}")
     print(f"  - 카테고리: {[c.value for c in categories]}")
-    print(f"  - 작업 수: {len(tasks)}개")
+    print(f"  - 남은 작업: {len(tasks)}개")
     print(f"  - 총 예상 생성: {total_count}건")
     print(f"  - 품질 검증: {'예' if validate else '아니오'}")
-    print(f"  - 출력 경로: {output_path.absolute()}")
 
     # 비용 추정 (Standard 가격) - 턴 수 기반 계산
     TOKENS_INPUT_BASE = 700
@@ -347,21 +386,51 @@ async def run_batch_mode(
     if settings.max_budget_usd > 0:
         print(f"  - 예산 한도: ${settings.max_budget_usd:.2f}")
 
-    # 배치 처리기 생성
-    processor = BatchProcessor(output_dir=output_path)
+    print(f"\n⚠️  Track A 고위험군은 BLOCK_NONE 안전 설정이 적용됩니다.")
+    print(f"✅ 각 작업 완료 시 즉시 저장됩니다.")
+
+    # 확인
+    confirm = input("\n계속 진행하시겠습니까? (y/N): ")
+    if confirm.lower() != 'y':
+        print("취소되었습니다.")
+        return
+
+    # 출력 경로 생성
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    # Graceful shutdown 설정
+    shutdown_requested = False
+
+    def signal_handler(signum, frame):
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            print("\n\n⚠️  강제 종료...")
+            sys.exit(1)
+        shutdown_requested = True
+        print("\n\n⚠️  현재 작업 완료 후 종료합니다. (다시 Ctrl+C: 강제 종료)")
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    # 생성기 초기화
+    crisis_gen = CrisisGenerator(settings=settings)
+    general_gen = GeneralGenerator(settings=settings)
+    quality_checker = QualityChecker() if validate else None
 
     # 결과 집계
     total_generated = 0
     total_failed = 0
     total_validated = 0
     total_rejected = 0
-    total_cost = 0.0
-    all_errors = []
-
-    print(f"\n⏳ 배치 처리 시작...")
+    total_cost_result = 0.0
+    last_task_idx = 0
 
     # 작업별 처리
     for task_idx, task in enumerate(tasks):
+        last_task_idx = task_idx
+        if shutdown_requested:
+            print(f"\n⚠️  사용자 요청으로 중지됨")
+            break
+
         cat = task['category']
         t_type = task['turn_type']
         task_count = task['count']
@@ -375,46 +444,90 @@ async def run_batch_mode(
             print(f"   ({CounselingCategory.get_korean_name(cat)}) - {task_count}건")
         print("=" * 60)
 
-        # 작업 생성
-        job = processor.create_job(
-            name=f"배치-{cat.value}-{t_type}" if t_type else f"배치-{cat.value}",
-            track=track,
-            categories=[cat],
-            count_per_category=task_count,
+        # 생성기 선택
+        track_for_cat = CounselingCategory.get_track(cat)
+        if track_for_cat == "A":
+            generator = crisis_gen
+        else:
+            generator = general_gen
+
+        # 세션 생성
+        print(f"⏳ 세션 생성 중... ({task_count}건)")
+        sessions = await generator.generate_batch(
+            category=cat,
+            count=task_count,
             min_turns=task['min_turns'],
             max_turns=task['max_turns'],
-            validate=validate,
         )
 
-        # 실행
-        result = await processor.run(job)
+        # 품질 검증
+        validated_sessions = sessions
+        rejected_count = 0
+        if validate and quality_checker and sessions:
+            print(f"⏳ 품질 검증 중...")
+            scores = await quality_checker.evaluate_batch(sessions, sample_rate=1.0)
+            validated_sessions = []
+            for session, score in zip(sessions, scores):
+                if score.overall_score >= 0.6:  # 60% 이상 통과
+                    validated_sessions.append(session)
+                else:
+                    rejected_count += 1
 
-        # 결과 집계
-        total_generated += result.total_generated
-        total_failed += result.total_failed
-        total_validated += result.total_validated
-        total_rejected += result.total_rejected
-        total_cost += result.estimated_cost_usd
-        all_errors.extend(result.errors)
+        # 결과 저장 (분포 모드: 카테고리/턴타입.jsonl, 일반 모드: 카테고리.jsonl)
+        if t_type:
+            cat_dir = job_dir / cat.value
+            cat_dir.mkdir(parents=True, exist_ok=True)
+            save_file = cat_dir / f"{t_type}.jsonl"
+        else:
+            save_file = job_dir / f"{cat.value}.jsonl"
 
-        print(f"   ✅ 완료: 성공 {result.total_generated}건, 실패 {result.total_failed}건")
+        with open(save_file, "w", encoding="utf-8") as f:
+            for session in validated_sessions:
+                line = json.dumps(session.model_dump(mode="json"), ensure_ascii=False)
+                f.write(line + "\n")
 
-    # 최종 결과 출력
-    print("\n" + "=" * 60)
-    print("📊 배치 처리 결과")
+        # 통계
+        gen_cost = generator.stats.get("estimated_cost", 0.0)
+        success_count = len(validated_sessions)
+        fail_count = task_count - len(sessions)
+
+        if t_type:
+            print(f"\n✅ 작업 완료: {cat.value}/{t_type}")
+        else:
+            print(f"\n✅ 작업 완료: {cat.value}")
+        print(f"   - 생성: {len(sessions)}건")
+        print(f"   - 검증 통과: {success_count}건")
+        if validate:
+            print(f"   - 검증 탈락: {rejected_count}건")
+        print(f"   - 저장: {save_file}")
+
+        total_generated += len(sessions)
+        total_failed += fail_count
+        total_validated += success_count
+        total_rejected += rejected_count
+
+    # 최종 결과
+    print(f"\n{'=' * 60}")
+    print("📊 배치 처리 완료")
     print("=" * 60)
-    print(f"  - 총 요청: {total_count}건")
-    print(f"  - 생성 성공: {total_generated}건")
-    print(f"  - 생성 실패: {total_failed}건")
+    print(f"  - 작업 ID: {job_id}")
+    print(f"  - 완료 작업: {len(completed_tasks) + last_task_idx + 1 - (1 if shutdown_requested else 0)}개")
+    print(f"  - 총 생성: {total_generated}건")
+    print(f"  - 총 실패: {total_failed}건")
     if validate:
         print(f"  - 검증 통과: {total_validated}건")
         print(f"  - 검증 탈락: {total_rejected}건")
-    print(f"  - 예상 비용: ${total_cost:.2f}")
+    print(f"  - 저장 위치: {job_dir}")
 
-    if all_errors:
-        print(f"\n⚠️  오류 목록:")
-        for err in all_errors[:5]:
-            print(f"    - {err}")
+    # 남은 작업 안내
+    remaining_tasks = tasks[last_task_idx + (0 if shutdown_requested else 1):]
+    if remaining_tasks:
+        print(f"\n⚠️  남은 작업: {len(remaining_tasks)}개")
+        print(f"이어서 시작하려면:")
+        dist_opt = f" --distribution {distribution}" if distribution else ""
+        turn_opt = f" --turn-type {turn_type}" if turn_type else ""
+        cat_opt = f" --category {category}" if category else ""
+        print(f"  python main.py --mode batch --track {track} --count {count}{dist_opt}{turn_opt}{cat_opt} --output {output_path} --resume {job_id}")
 
 
 async def run_pipeline_mode(
