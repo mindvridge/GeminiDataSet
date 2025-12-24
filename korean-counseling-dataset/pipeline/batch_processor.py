@@ -185,6 +185,71 @@ class BatchProcessor:
             return -1  # 무제한
         return max(0, max_budget - self.get_current_cost())
 
+    def get_completed_categories(self, job_id: str) -> list[str]:
+        """
+        완료된 카테고리 목록 조회
+
+        Args:
+            job_id: 작업 ID
+
+        Returns:
+            완료된 카테고리 이름 리스트
+        """
+        job_dir = self.output_dir / job_id
+        if not job_dir.exists():
+            return []
+
+        completed = []
+        for file_path in job_dir.glob("*.jsonl"):
+            # sessions.jsonl은 전체 통합 파일이므로 제외
+            if file_path.stem != "sessions":
+                completed.append(file_path.stem)
+
+        return completed
+
+    def get_resume_info(self, job_id: str) -> dict:
+        """
+        이어서 시작 정보 조회
+
+        Args:
+            job_id: 작업 ID
+
+        Returns:
+            이어서 시작 정보 딕셔너리
+        """
+        job_dir = self.output_dir / job_id
+        if not job_dir.exists():
+            return {"exists": False}
+
+        completed = self.get_completed_categories(job_id)
+
+        # 메타데이터 파일 확인
+        metadata_path = job_dir / "metadata.json"
+        metadata = {}
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+            except:
+                pass
+
+        # 완료된 세션 수 계산
+        total_sessions = 0
+        for cat in completed:
+            cat_file = job_dir / f"{cat}.jsonl"
+            if cat_file.exists():
+                with open(cat_file, "r", encoding="utf-8") as f:
+                    total_sessions += sum(1 for _ in f)
+
+        return {
+            "exists": True,
+            "job_id": job_id,
+            "job_dir": str(job_dir),
+            "completed_categories": completed,
+            "total_sessions": total_sessions,
+            "metadata": metadata,
+        }
+
     @property
     def crisis_generator(self) -> CrisisGenerator:
         """위기 상담 생성기 (지연 로딩)"""
@@ -240,6 +305,7 @@ class BatchProcessor:
         min_turns: int = 5,
         max_turns: int = 10,
         validate: bool = True,
+        resume_job_id: Optional[str] = None,
     ) -> BatchJob:
         """
         배치 작업 생성
@@ -252,6 +318,7 @@ class BatchProcessor:
             min_turns: 최소 턴 수
             max_turns: 최대 턴 수
             validate: 품질 검증 실행 여부
+            resume_job_id: 이어서 시작할 작업 ID (선택적)
 
         Returns:
             생성된 BatchJob
@@ -268,7 +335,14 @@ class BatchProcessor:
                 from models.prompts import TRACK_A_CATEGORIES, TRACK_B_CATEGORIES
                 categories = TRACK_A_CATEGORIES + TRACK_B_CATEGORIES
 
+        # 이어서 시작인 경우 기존 job_id 사용
+        if resume_job_id:
+            job_id = resume_job_id
+        else:
+            job_id = str(uuid4())
+
         job = BatchJob(
+            job_id=job_id,
             name=name,
             track=track,
             categories=categories,
@@ -279,7 +353,11 @@ class BatchProcessor:
         )
 
         self.jobs[job.job_id] = job
-        logger.info(f"배치 작업 생성: {job.job_id} ({name})")
+
+        if resume_job_id:
+            logger.info(f"배치 작업 이어서 시작: {job.job_id} ({name})")
+        else:
+            logger.info(f"배치 작업 생성: {job.job_id} ({name})")
 
         return job
 
@@ -311,7 +389,24 @@ class BatchProcessor:
         try:
             total_categories = len(job.categories)
 
+            # 이미 완료된 카테고리 확인 (이어서 시작 지원)
+            completed_categories = self.get_completed_categories(job.job_id)
+            if completed_categories:
+                logger.info(f"이어서 시작: {len(completed_categories)}개 카테고리 완료됨")
+                print(f"\n📋 이전 진행 상황 감지:")
+                for cat_name in completed_categories:
+                    print(f"   ✅ {cat_name}: 완료됨")
+
             for idx, category in enumerate(job.categories):
+                # 이미 완료된 카테고리는 건너뛰기
+                if category.value in completed_categories:
+                    self._report_progress(
+                        idx + 1,
+                        total_categories,
+                        f"카테고리 건너뛰기 (완료됨): {category.value}"
+                    )
+                    continue
+
                 self._report_progress(
                     idx,
                     total_categories,

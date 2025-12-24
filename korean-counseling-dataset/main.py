@@ -221,10 +221,14 @@ async def run_batch_mode(
     max_turns: int = 10,
     validate: bool = True,
     output: Optional[str] = None,
+    resume: Optional[str] = None,
 ) -> None:
     """배치 생성 모드"""
     print("\n" + "=" * 60)
-    print("📦 배치 생성 모드")
+    if resume:
+        print("📦 배치 생성 모드 (이어서 시작)")
+    else:
+        print("📦 배치 생성 모드")
     print("=" * 60)
 
     # 카테고리 결정
@@ -249,6 +253,18 @@ async def run_batch_mode(
     print(f"  - 출력 경로: {output_path.absolute()}")
     processor = BatchProcessor(output_dir=output_path)
 
+    # 이어서 시작 정보 확인
+    if resume:
+        resume_info = processor.get_resume_info(resume)
+        if resume_info["exists"]:
+            print(f"\n📋 이전 작업 발견:")
+            print(f"  - 작업 ID: {resume}")
+            print(f"  - 완료된 카테고리: {resume_info['completed_categories']}")
+            print(f"  - 저장된 세션: {resume_info['total_sessions']}건")
+        else:
+            print(f"\n⚠️  작업 ID '{resume}'를 찾을 수 없습니다. 새로 시작합니다.")
+            resume = None
+
     # 예산 한도 표시
     settings = get_settings()
     if settings.max_budget_usd > 0:
@@ -265,9 +281,13 @@ async def run_batch_mode(
         min_turns=min_turns,
         max_turns=max_turns,
         validate=validate,
+        resume_job_id=resume,
     )
 
-    print(f"\n⏳ 배치 처리 시작... (작업 ID: {job.job_id})")
+    if resume:
+        print(f"\n⏳ 배치 처리 이어서 시작... (작업 ID: {job.job_id})")
+    else:
+        print(f"\n⏳ 배치 처리 시작... (작업 ID: {job.job_id})")
 
     # 실행
     result = await processor.run(job)
@@ -678,6 +698,13 @@ def main():
         help="출력 경로",
     )
 
+    # 이어서 시작
+    parser.add_argument(
+        "--resume",
+        type=str,
+        help="이어서 시작할 작업 ID (예: e23c5ce2-ae92-490f-8add-97a370c7be5f)",
+    )
+
     # 예산 한도
     parser.add_argument(
         "--max-budget",
@@ -734,6 +761,7 @@ def main():
             max_turns=args.max_turns,
             validate=args.validate,
             output=args.output,
+            resume=args.resume,
         ))
 
     elif args.mode == "batch-api":
