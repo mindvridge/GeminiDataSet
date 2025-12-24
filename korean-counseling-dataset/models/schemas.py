@@ -144,6 +144,21 @@ class ClientUtterance(BaseModel):
         default_factory=list,
         description="발견된 위험 지표 (예: 자살 사고, 자해 충동, 희망 상실)"
     )
+
+    @field_validator("risk_indicators", mode="before")
+    @classmethod
+    def parse_risk_indicators(cls, v):
+        """다양한 형식의 risk_indicators를 list[str]로 변환"""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            if v in ("없음", "없다", "null", "None", ""):
+                return []
+            return [item.strip() for item in v.split(",") if item.strip()]
+        if isinstance(v, list):
+            return [str(item) for item in v if item is not None and str(item).strip()]
+        return []
+
     intensity: int = Field(
         default=5,
         ge=1,
@@ -176,6 +191,24 @@ class TherapistResponse(BaseModel):
         default_factory=list,
         description="내담자 발화에서 발견된 인지 왜곡 패턴"
     )
+
+    @field_validator("cognitive_distortions", mode="before")
+    @classmethod
+    def parse_cognitive_distortions(cls, v):
+        """다양한 형식의 cognitive_distortions를 list[str]로 변환"""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            # "없음" 등의 문자열 처리
+            if v in ("없음", "없다", "null", "None", ""):
+                return []
+            # 쉼표로 구분된 문자열 처리
+            return [item.strip() for item in v.split(",") if item.strip()]
+        if isinstance(v, list):
+            # 리스트 내 None 값 필터링
+            return [str(item) for item in v if item is not None and str(item).strip()]
+        return []
+
     intervention_strategy: str = Field(
         description="선택한 개입 전략 (예: 위기 개입, 인지 재구조화, 감정 탐색)"
     )
@@ -189,6 +222,21 @@ class TherapistResponse(BaseModel):
         default_factory=list,
         description="함께 사용된 보조 공감 기법들"
     )
+
+    @field_validator("secondary_techniques", mode="before")
+    @classmethod
+    def parse_secondary_techniques(cls, v):
+        """다양한 형식의 secondary_techniques를 list로 변환"""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            if v in ("없음", "없다", "null", "None", ""):
+                return []
+            return [item.strip() for item in v.split(",") if item.strip()]
+        if isinstance(v, list):
+            return [item for item in v if item is not None]
+        return []
+
     safety_action: Optional[str] = Field(
         default=None,
         description="안전 관련 조치 (위기 상황 시 필수 기록)"
@@ -267,6 +315,21 @@ class CounselingSession(BaseModel):
         default_factory=list,
         description="치료 목표"
     )
+
+    @field_validator("treatment_goals", mode="before")
+    @classmethod
+    def parse_treatment_goals(cls, v):
+        """다양한 형식의 treatment_goals를 list[str]로 변환"""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            if v in ("없음", "없다", "null", "None", ""):
+                return []
+            return [item.strip() for item in v.split(",") if item.strip()]
+        if isinstance(v, list):
+            return [str(item) for item in v if item is not None and str(item).strip()]
+        return []
+
     homework: Optional[str] = Field(
         default=None,
         description="과제 (다음 세션까지 수행할 활동)"
