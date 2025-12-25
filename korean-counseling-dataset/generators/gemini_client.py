@@ -327,18 +327,21 @@ class GeminiClient:
         system_prompt: str,
         user_prompt: str,
         history: Optional[list[dict]] = None,
-        max_retries: int = 3,
-        retry_delay: float = 2.0,
+        max_retries: int = 5,
+        retry_delay: float = 5.0,
     ) -> ResponseComponents:
         """
-        재시도 로직이 포함된 콘텐츠 생성
+        강화된 지수 백오프가 적용된 재시도 로직
+
+        429 RESOURCE_EXHAUSTED 에러에 대해 더 긴 대기 시간을 적용합니다.
+        지수 백오프: 5초 -> 15초 -> 45초 -> 120초 -> 300초
 
         Args:
             system_prompt: 시스템 프롬프트
             user_prompt: 사용자 프롬프트
             history: 대화 히스토리
-            max_retries: 최대 재시도 횟수
-            retry_delay: 재시도 간 대기 시간 (초)
+            max_retries: 최대 재시도 횟수 (기본값: 5)
+            retry_delay: 기본 재시도 대기 시간 (초, 기본값: 5.0)
 
         Returns:
             ResponseComponents: 생성된 응답
@@ -357,12 +360,38 @@ class GeminiClient:
 
             except Exception as e:
                 last_error = e
-                logger.warning(
-                    f"생성 실패 (시도 {attempt + 1}/{max_retries + 1}): {e}"
+                error_str = str(e).lower()
+
+                # 429 Rate Limit 에러 감지
+                is_rate_limit = (
+                    "429" in str(e) or
+                    "resource_exhausted" in error_str or
+                    "quota" in error_str or
+                    "rate" in error_str
                 )
 
+                if is_rate_limit:
+                    logger.warning(
+                        f"⚠️ Rate Limit 감지 (시도 {attempt + 1}/{max_retries + 1}): {e}"
+                    )
+                else:
+                    logger.warning(
+                        f"생성 실패 (시도 {attempt + 1}/{max_retries + 1}): {e}"
+                    )
+
             if attempt < max_retries:
-                await asyncio.sleep(retry_delay * (attempt + 1))  # 지수 백오프
+                # 지수 백오프 계산 (3배씩 증가, 최대 5분)
+                # 5초 -> 15초 -> 45초 -> 135초 -> 300초(최대)
+                wait_time = min(retry_delay * (3 ** attempt), 300)
+
+                # 429 에러의 경우 추가 대기
+                if last_error and ("429" in str(last_error) or "resource_exhausted" in str(last_error).lower()):
+                    wait_time = min(wait_time * 2, 300)  # 2배 더 대기 (최대 5분)
+                    logger.info(f"⏳ Rate Limit 회복 대기 중... {wait_time:.0f}초")
+                else:
+                    logger.info(f"⏳ 재시도 대기 중... {wait_time:.0f}초")
+
+                await asyncio.sleep(wait_time)
 
         logger.error(f"최대 재시도 횟수 초과: {last_error}")
         return ResponseComponents()

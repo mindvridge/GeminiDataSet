@@ -82,12 +82,12 @@ class Settings(BaseSettings):
         description="최대 동시 요청 수"
     )
     retry_attempts: int = Field(
-        default=3,
-        description="API 호출 재시도 횟수"
+        default=5,
+        description="API 호출 재시도 횟수 (429 에러 대응 강화)"
     )
     retry_delay: float = Field(
-        default=2.0,
-        description="재시도 간 대기 시간 (초)"
+        default=5.0,
+        description="재시도 기본 대기 시간 (초, 지수 백오프 적용: 5s->15s->45s->135s->300s)"
     )
     request_timeout: int = Field(
         default=120,
