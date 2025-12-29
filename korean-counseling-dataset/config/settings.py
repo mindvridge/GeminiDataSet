@@ -134,6 +134,24 @@ class Settings(BaseSettings):
         description="최소 한국어 자연스러움 점수 (1~5)"
     )
 
+    # ==================== Elice ML API 설정 (Track B) ====================
+    elice_api_base_url: str = Field(
+        default="",
+        description="Elice ML API Base URL (OpenAI 호환)"
+    )
+    elice_api_key: str = Field(
+        default="",
+        description="Elice ML API Key"
+    )
+    elice_model: str = Field(
+        default="google/gemini-3-flash",
+        description="Elice ML API 모델 ID"
+    )
+    track_b_api: Literal["elice", "vertex"] = Field(
+        default="elice",
+        description="Track B API 선택 (elice: Elice ML API, vertex: Vertex AI)"
+    )
+
     # ==================== 로깅 설정 ====================
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",

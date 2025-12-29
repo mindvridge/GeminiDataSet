@@ -46,6 +46,7 @@ from models.prompts import (
 from models.scenario_variation import generate_varied_scenario_prompt
 
 from .gemini_client import GeminiClient, ThinkingConfig, create_flash_client
+from .openai_client import OpenAICompatibleClient, create_elice_client
 
 logger = logging.getLogger(__name__)
 
@@ -101,15 +102,23 @@ class GeneralGenerator:
         if client:
             self.client = client
         else:
-            self.client = GeminiClient(
-                track="B",
-                settings=self.settings,
-                custom_safety_config=get_general_safety_settings(),
-                custom_thinking_config=ThinkingConfig(
-                    include_thoughts=True,
-                    thinking_level="LOW"
+            # Track B API 선택에 따라 클라이언트 결정
+            if self.settings.track_b_api == "elice":
+                # Elice ML API (OpenAI 호환) 사용
+                self.client = create_elice_client(self.settings)
+                logger.info("Track B: Elice ML API (OpenAI 호환) 클라이언트 사용")
+            else:
+                # Vertex AI Gemini Flash 사용
+                self.client = GeminiClient(
+                    track="B",
+                    settings=self.settings,
+                    custom_safety_config=get_general_safety_settings(),
+                    custom_thinking_config=ThinkingConfig(
+                        include_thoughts=True,
+                        thinking_level="LOW"
+                    )
                 )
-            )
+                logger.info("Track B: Vertex AI Gemini Flash 클라이언트 사용")
 
         # Few-shot 예시 저장소
         self.few_shot_examples: dict[CounselingCategory, list[CounselingSession]] = \
