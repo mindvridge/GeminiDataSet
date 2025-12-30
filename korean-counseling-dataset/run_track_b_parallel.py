@@ -97,12 +97,25 @@ class ParallelBatchGenerator:
             json.dump(progress, f, indent=2)
 
     def _get_current_count(self, turn_type: str) -> int:
-        """현재 저장된 데이터 수 확인"""
-        file_path = self.output_dir / self.category.value / f"{turn_type}.jsonl"
-        if not file_path.exists():
-            return 0
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return sum(1 for line in f if line.strip())
+        """현재 저장된 데이터 수 확인 (분할 파일 지원)"""
+        category_dir = self.output_dir / self.category.value
+        count = 0
+
+        # 단일 파일 체크
+        single_file = category_dir / f"{turn_type}.jsonl"
+        if single_file.exists():
+            with open(single_file, 'r', encoding='utf-8') as f:
+                count += sum(1 for line in f if line.strip())
+
+        # 분할 파일 체크 (예: medium_1.jsonl, medium_2.jsonl, ...)
+        for split_file in sorted(category_dir.glob(f"{turn_type}_*.jsonl")):
+            # 백업 파일 제외
+            if "backup" in split_file.name or "original" in split_file.name:
+                continue
+            with open(split_file, 'r', encoding='utf-8') as f:
+                count += sum(1 for line in f if line.strip())
+
+        return count
 
     async def _save_session(self, session, turn_type: str):
         """세션 즉시 저장 (스레드 안전)"""
