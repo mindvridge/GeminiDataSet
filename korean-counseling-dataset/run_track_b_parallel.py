@@ -182,18 +182,23 @@ class ParallelBatchGenerator:
         success_count = sum(1 for r in results if r is True)
         return success_count
 
-    async def run(self, resume: bool = False):
+    async def run(self, resume: bool = False, skip_long: bool = False):
         """메인 실행"""
         print("=" * 70)
         print(f"🚀 Track B 병렬 배치 생성 - {self.category.value}")
         print(f"⚡ 동시 요청 수: {self.concurrency}개")
+        if skip_long:
+            print(f"⏭️ long 세션 생성 제외")
         print("=" * 70)
+
+        # 생성할 턴 타입 목록
+        turn_types = ["short", "medium"] if skip_long else ["short", "medium", "long"]
 
         # 진행 상황 확인
         if resume:
             progress = self._load_progress()
             print(f"\n📋 이전 진행 상황 발견:")
-            for t in ["short", "medium", "long"]:
+            for t in turn_types:
                 current = self._get_current_count(t)
                 target = self.distribution[t]
                 print(f"   {t}: {current}/{target}")
@@ -205,7 +210,8 @@ class ParallelBatchGenerator:
         print(f"   총 {self.target_count}건 (balanced 분포)")
         print(f"   - short: {self.distribution['short']}건")
         print(f"   - medium: {self.distribution['medium']}건")
-        print(f"   - long: {self.distribution['long']}건")
+        if not skip_long:
+            print(f"   - long: {self.distribution['long']}건")
         print(f"\n💾 저장 방식: {self.batch_size}건씩 즉시 저장")
         print(f"📁 저장 위치: {self.output_dir / self.category.value}")
 
@@ -215,7 +221,7 @@ class ParallelBatchGenerator:
         self.stats["start_time"] = datetime.now()
 
         # 각 턴 타입별 생성
-        for turn_type in ["short", "medium", "long"]:
+        for turn_type in turn_types:
             target = self.distribution[turn_type]
             current = self._get_current_count(turn_type)
             remaining = target - current
@@ -302,6 +308,8 @@ def main():
                        help="이전 작업 이어서 시작")
     parser.add_argument("--output", type=str, default="data/raw/track_b",
                        help="출력 디렉토리")
+    parser.add_argument("--skip-long", action="store_true",
+                       help="long 세션 생성 제외 (API 타임아웃 회피)")
 
     args = parser.parse_args()
 
@@ -314,7 +322,7 @@ def main():
         output_dir=args.output,
     )
 
-    asyncio.run(generator.run(resume=args.resume))
+    asyncio.run(generator.run(resume=args.resume, skip_long=args.skip_long))
 
 
 if __name__ == "__main__":
