@@ -5,8 +5,9 @@
 GitHub 100MB 제한을 피하기 위해 큰 파일을 분할합니다.
 
 사용법:
-    python scripts/split_large_files.py
-    python scripts/split_large_files.py --max-size 80  # 80MB 기준
+    python scripts/split_large_files.py                    # 자동 검색 & 분할
+    python scripts/split_large_files.py --file 파일경로    # 특정 파일 분할
+    python scripts/split_large_files.py --max-size 80      # 80MB 기준
 """
 
 import argparse
@@ -21,7 +22,10 @@ def get_file_size_mb(file_path: Path) -> float:
 
 def split_jsonl_file(file_path: Path, max_size_mb: int = 80) -> list:
     """JSONL 파일을 max_size_mb 이하로 분할"""
+    file_path = Path(file_path)
+
     if not file_path.exists():
+        print(f"  ❌ 파일 없음: {file_path}")
         return []
 
     file_size = get_file_size_mb(file_path)
@@ -72,18 +76,9 @@ def split_jsonl_file(file_path: Path, max_size_mb: int = 80) -> list:
     return created_files
 
 
-def main():
-    parser = argparse.ArgumentParser(description="대용량 JSONL 파일 분할")
-    parser.add_argument("--max-size", type=int, default=80,
-                       help="최대 파일 크기 (MB, 기본값: 80)")
-    parser.add_argument("--path", type=str, default="data/raw/track_b",
-                       help="검색 경로")
-
-    args = parser.parse_args()
-
-    base_path = Path(args.path)
-
-    print(f"\n🔍 대용량 파일 검색 중... (기준: {args.max_size}MB)")
+def find_and_split_all(base_path: Path, max_size_mb: int = 80):
+    """모든 대용량 파일 검색 및 분할"""
+    print(f"\n🔍 대용량 파일 검색 중... (기준: {max_size_mb}MB)")
     print(f"   경로: {base_path}\n")
 
     # 모든 JSONL 파일 검색
@@ -96,21 +91,51 @@ def main():
         if "backup" in jsonl_file.name or "original" in jsonl_file.name:
             continue
 
-        size = get_file_size_mb(jsonl_file)
-        if size > args.max_size:
-            large_files.append((jsonl_file, size))
+        try:
+            size = get_file_size_mb(jsonl_file)
+            if size > max_size_mb:
+                large_files.append((jsonl_file, size))
+        except:
+            continue
 
     if not large_files:
         print("✅ 분할이 필요한 파일이 없습니다.")
         return
 
-    print(f"📋 분할 대상: {len(large_files)}개 파일\n")
+    print(f"📋 분할 대상: {len(large_files)}개 파일")
+    for f, s in large_files:
+        print(f"   - {f}: {s:.1f}MB")
+    print()
 
     for file_path, size in large_files:
         print(f"\n[{file_path.parent.name}]")
-        split_jsonl_file(file_path, args.max_size)
+        split_jsonl_file(file_path, max_size_mb)
 
     print(f"\n✅ 분할 완료!")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="대용량 JSONL 파일 분할")
+    parser.add_argument("--file", "-f", type=str,
+                       help="분할할 특정 파일 경로")
+    parser.add_argument("--max-size", "-s", type=int, default=80,
+                       help="최대 파일 크기 (MB, 기본값: 80)")
+    parser.add_argument("--path", "-p", type=str, default="data/raw",
+                       help="검색 경로 (기본값: data/raw)")
+
+    args = parser.parse_args()
+
+    print("\n" + "=" * 50)
+    print("📦 대용량 JSONL 파일 분할 도구")
+    print("=" * 50)
+
+    if args.file:
+        # 특정 파일 분할
+        print(f"\n📄 파일 분할: {args.file}")
+        split_jsonl_file(Path(args.file), args.max_size)
+    else:
+        # 자동 검색 & 분할
+        find_and_split_all(Path(args.path), args.max_size)
 
 
 if __name__ == "__main__":
